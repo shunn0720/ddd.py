@@ -1,7 +1,8 @@
 import discord
 import asyncio
-import os  # 環境変数を読み込むために必要
+import os
 from discord.ext import commands
+from discord.ui import Button, View
 
 intents = discord.Intents.default()
 intents.message_content = True  # メッセージ内容の取得に必要
@@ -19,16 +20,25 @@ THREAD_PARENT_CHANNEL_ID = 1288732448900775958
 # コマンド実行を許可するユーザーID
 AUTHORIZED_USER_IDS = [822460191118721034, 302778094320615425]
 
-# ボタンの選択肢（絵文字ではなく文字列のまま使用）
-reaction_options = {
-    "すごくいい人": "すごくいい人",  # 文字列をそのまま保持
-    "いい人": "いい人",
-    "微妙な人": "微妙な人",
-    "やばい人": "やばい人"
-}
-
 # Bot設定
 bot = commands.Bot(command_prefix='!', intents=intents)
+
+# ボタンの選択肢
+reaction_options = ["すごくいい人", "いい人", "微妙な人", "やばい人"]
+
+class ReactionButton(Button):
+    def __init__(self, label):
+        super().__init__(label=label, style=discord.ButtonStyle.primary)
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.send_message(f"{interaction.user.display_name} は '{self.label}' を選びました！", ephemeral=True)
+
+# Viewにボタンを追加
+def create_reaction_view():
+    view = View()
+    for option in reaction_options:
+        view.add_item(ReactionButton(label=option))
+    return view
 
 @bot.event
 async def on_message(message):
@@ -38,11 +48,7 @@ async def on_message(message):
         embed = discord.Embed(color=discord.Color.blue())
         embed.set_author(name=message.author.display_name, icon_url=message.author.avatar.url)
 
-        sent_message = await destination_channel.send(embed=embed)
-
-        # reaction_options の対応する文字列をリアクションとして追加
-        for option in reaction_options.values():
-            await sent_message.add_reaction(option)  # ここで文字列をそのまま使う
+        sent_message = await destination_channel.send(embed=embed, view=create_reaction_view())
 
         thread_parent_channel = bot.get_channel(THREAD_PARENT_CHANNEL_ID)
         thread = await thread_parent_channel.create_thread(
@@ -55,19 +61,7 @@ async def on_message(message):
 
 async def schedule_reaction_summary(thread, message):
     await asyncio.sleep(5 * 24 * 60 * 60)
-
-    reaction_summary = []
-    for reaction in message.reactions:
-        users = await reaction.users().flatten()
-        user_names = [user.display_name for user in users if not user.bot]
-        if user_names:
-            reaction_summary.append(f"{reaction.emoji}: {', '.join(user_names)}")
-
-    if reaction_summary:
-        summary_message = "\n".join(reaction_summary)
-        await thread.send(f"5日後のリアクション結果:\n{summary_message}")
-    else:
-        await thread.send("5日後のリアクション結果: 誰もリアクションを押しませんでした。")
+    await thread.send("5日後のリアクション集計です。")
 
 @bot.command()
 async def 終了(ctx, message_id: int):
