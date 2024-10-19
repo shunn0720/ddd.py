@@ -13,7 +13,7 @@ TOKEN = os.getenv('DISCORD_TOKEN')
 
 # チャンネルIDを設定
 SOURCE_CHANNEL_IDS = [1282174861996724295, 1282174893290557491]
-DESTINATION_CHANNEL_ID = 1283670849542557769
+DESTINATION_CHANNEL_ID = 1289802546180784240  # 新しいIDに変更
 THREAD_PARENT_CHANNEL_ID = 1288732448900775958
 
 # コマンド実行を許可するユーザーID
@@ -76,6 +76,27 @@ async def 終了(ctx, message_id: int):
         return
 
     try:
+        channel = bot.get_channel(DESTINATION_CHANNEL_ID)
+        message = await channel.fetch_message(message_id)
+        await message.delete()
+        await ctx.send(f"メッセージID {message_id} を削除しました。")
+
+    except discord.NotFound:
+        await ctx.send("指定されたメッセージが見つかりません。")
+    except discord.Forbidden:
+        await ctx.send("このメッセージを削除する権限がありません。")
+    except discord.HTTPException as e:
+        await ctx.send(f"メッセージの削除に失敗しました: {str(e)}")
+
+# "deldel" コマンドを定義（指定されたメッセージを削除）
+@bot.command()
+async def deldel(ctx, message_id: int):
+    if ctx.author.id not in AUTHORIZED_USER_IDS:
+        await ctx.send("このコマンドを実行する権限がありません。")
+        return
+
+    try:
+        # チャンネルから指定されたメッセージを取得
         channel = bot.get_channel(DESTINATION_CHANNEL_ID)
         message = await channel.fetch_message(message_id)
         await message.delete()
