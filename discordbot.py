@@ -19,12 +19,12 @@ THREAD_PARENT_CHANNEL_ID = 1288732448900775958
 # コマンド実行を許可するユーザーID
 AUTHORIZED_USER_IDS = [822460191118721034, 302778094320615425]
 
-# ボタンの選択肢 (文字列は保持するが、絵文字としてリアクションを追加)
+# ボタンの選択肢（絵文字ではなく文字列のまま使用）
 reaction_options = {
-    "すごくいい人": "👍",  # 文字列を絵文字に対応
-    "いい人": "😊",
-    "微妙な人": "😐",
-    "やばい人": "👎"
+    "すごくいい人": "すごくいい人",  # 文字列をそのまま保持
+    "いい人": "いい人",
+    "微妙な人": "微妙な人",
+    "やばい人": "やばい人"
 }
 
 # Bot設定
@@ -40,9 +40,9 @@ async def on_message(message):
 
         sent_message = await destination_channel.send(embed=embed)
 
-        # reaction_options の対応する絵文字をリアクションとして追加
+        # reaction_options の対応する文字列をリアクションとして追加
         for option in reaction_options.values():
-            await sent_message.add_reaction(option)
+            await sent_message.add_reaction(option)  # ここで文字列をそのまま使う
 
         thread_parent_channel = bot.get_channel(THREAD_PARENT_CHANNEL_ID)
         thread = await thread_parent_channel.create_thread(
@@ -76,27 +76,6 @@ async def 終了(ctx, message_id: int):
         return
 
     try:
-        channel = bot.get_channel(DESTINATION_CHANNEL_ID)
-        message = await channel.fetch_message(message_id)
-        await message.delete()
-        await ctx.send(f"メッセージID {message_id} を削除しました。")
-
-    except discord.NotFound:
-        await ctx.send("指定されたメッセージが見つかりません。")
-    except discord.Forbidden:
-        await ctx.send("このメッセージを削除する権限がありません。")
-    except discord.HTTPException as e:
-        await ctx.send(f"メッセージの削除に失敗しました: {str(e)}")
-
-# "deldel" コマンドを定義（指定されたメッセージを削除）
-@bot.command()
-async def deldel(ctx, message_id: int):
-    if ctx.author.id not in AUTHORIZED_USER_IDS:
-        await ctx.send("このコマンドを実行する権限がありません。")
-        return
-
-    try:
-        # チャンネルから指定されたメッセージを取得
         channel = bot.get_channel(DESTINATION_CHANNEL_ID)
         message = await channel.fetch_message(message_id)
         await message.delete()
