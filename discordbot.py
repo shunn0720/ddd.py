@@ -2,7 +2,6 @@ import discord
 import asyncio
 import os
 from discord.ext import commands
-from discord.ui import Button, View
 
 intents = discord.Intents.default()
 intents.message_content = True  # メッセージ内容の取得に必要
@@ -26,7 +25,7 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 # ボタンの選択肢
 reaction_options = ["すごくいい人", "いい人", "微妙な人", "やばい人"]
 
-class ReactionButton(Button):
+class ReactionButton(discord.ui.Button):
     def __init__(self, label):
         super().__init__(label=label, style=discord.ButtonStyle.primary)
 
@@ -35,7 +34,7 @@ class ReactionButton(Button):
 
 # Viewにボタンを追加
 def create_reaction_view():
-    view = View()
+    view = discord.ui.View()
     for option in reaction_options:
         view.add_item(ReactionButton(label=option))
     return view
@@ -45,11 +44,24 @@ async def on_message(message):
     if message.channel.id in SOURCE_CHANNEL_IDS and not message.author.bot:
         destination_channel = bot.get_channel(DESTINATION_CHANNEL_ID)
 
+        # Embedメッセージの作成
         embed = discord.Embed(color=discord.Color.blue())
         embed.set_author(name=message.author.display_name, icon_url=message.author.avatar.url)
 
+        # 上部に表示する固定メッセージ
+        embed.add_field(
+            name="🌱つぼみ審査投票フォーム",
+            value=(
+                "必ずこのｻｰﾊﾞｰでお話した上で投票をお願いします。\n"
+                "複数回投票した場合は、最新のものを反映します。\n"
+                "この方の入場について、NG等意見のある方はお問い合わせください。"
+            ),
+            inline=False
+        )
+
         sent_message = await destination_channel.send(embed=embed, view=create_reaction_view())
 
+        # スレッドを作成
         thread_parent_channel = bot.get_channel(THREAD_PARENT_CHANNEL_ID)
         thread = await thread_parent_channel.create_thread(
             name=f"{message.author.display_name}のリアクション投票",
