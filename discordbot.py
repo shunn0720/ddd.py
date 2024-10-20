@@ -2,7 +2,7 @@ import discord
 import asyncio
 import os
 from discord.ext import commands
-from discord.ui import Button, View
+from discord.ui import Button, View, Modal, TextInput
 
 intents = discord.Intents.default()
 intents.message_content = True  # メッセージ内容の取得に必要
@@ -41,6 +41,49 @@ def create_user_embed(user: discord.Member):
     )
     return embed
 
+# コメントを入力するためのモーダル
+class CommentModal(Modal):
+    def __init__(self, label, user, interaction):
+        super().__init__(title="コメントを入力してください")
+
+        self.label = label
+        self.user = user
+        self.interaction = interaction
+
+        # コメント入力フィールドを追加
+        self.comment = TextInput(
+            label="コメント",
+            style=discord.TextStyle.paragraph,
+            placeholder="コメントを入力してください",
+            required=True
+        )
+        self.add_item(self.comment)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        # スレッド作成チャンネルでスレッドを作成
+        thread_parent_channel = bot.get_channel(THREAD_PARENT_CHANNEL_ID)
+        thread = await thread_parent_channel.create_thread(
+            name=f"{self.user.display_name}のリアクション投票スレッド",
+            auto_archive_duration=10080  # 7日
+        )
+
+        # ボタンを押したユーザー情報とコメントをEmbedでスレッドに転記
+        embed = discord.Embed(color=discord.Color.green())
+        embed.set_author(name=self.user.display_name, icon_url=self.user.avatar.url)
+        embed.add_field(
+            name="リアクション結果",
+            value=f"{self.interaction.user.display_name} が '{self.label}' を押しました。",
+            inline=False
+        )
+        embed.add_field(
+            name="コメント",
+            value=self.comment.value,  # 入力されたコメントをここに表示
+            inline=False
+        )
+
+        await thread.send(embed=embed)
+        await interaction.response.send_message(f"あなたのコメントがスレッドに転記されました！", ephemeral=True)
+
 # ボタンをクリックしたときの処理
 class ReactionButton(Button):
     def __init__(self, label, user):
@@ -48,24 +91,9 @@ class ReactionButton(Button):
         self.user = user
 
     async def callback(self, interaction: discord.Interaction):
-        # チャンネルID 1288732448900775958 にスレッドを作成し、誰がどのボタンを押したかEmbedで表示
-        thread_parent_channel = bot.get_channel(THREAD_PARENT_CHANNEL_ID)
-        thread = await thread_parent_channel.create_thread(
-            name=f"{self.user.display_name}のリアクション投票スレッド",
-            auto_archive_duration=10080  # 7日
-        )
-
-        # ボタンを押したユーザー情報をEmbedでスレッドに転記
-        embed = discord.Embed(color=discord.Color.green())
-        embed.set_author(name=self.user.display_name, icon_url=self.user.avatar.url)
-        embed.add_field(
-            name="リアクション結果",
-            value=f"{interaction.user.display_name} が '{self.label}' を押しました。",
-            inline=False
-        )
-
-        await thread.send(embed=embed)
-        await interaction.response.send_message(f"{interaction.user.display_name} は '{self.label}' を選びました！", ephemeral=True)
+        # コメントを入力するためのモーダルを表示
+        modal = CommentModal(label=self.label, user=self.user, interaction=interaction)
+        await interaction.response.send_modal(modal)
 
 # Viewにボタンを追加
 def create_reaction_view(user):
