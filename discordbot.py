@@ -62,19 +62,27 @@ async def on_message(message):
         sent_message = await destination_channel.send(embed=embed, view=create_reaction_view())
 
         # スレッドを作成
-        thread_parent_channel = bot.get_channel(THREAD_PARENT_CHANNEL_ID)
-        thread = await thread_parent_channel.create_thread(
-            name=f"{message.author.display_name}のリアクション投票",
-            message=sent_message,
-            auto_archive_duration=10080  # 7日
-        )
+        try:
+            thread_parent_channel = bot.get_channel(THREAD_PARENT_CHANNEL_ID)
+            thread = await thread_parent_channel.create_thread(
+                name=f"{message.author.display_name}のリアクション投票",
+                message=sent_message,
+                auto_archive_duration=10080  # 7日
+            )
+            await schedule_reaction_summary(thread, sent_message)
+        except discord.Forbidden:
+            print(f"スレッド作成権限が不足しています: {thread_parent_channel}")
+            await destination_channel.send("スレッド作成に失敗しました。ボットにスレッド作成の権限がない可能性があります。")
+        except discord.HTTPException as e:
+            print(f"スレッド作成に失敗しました: {e}")
+            await destination_channel.send(f"スレッド作成中にエラーが発生しました: {str(e)}")
 
-        await schedule_reaction_summary(thread, sent_message)
-
+# スレッドのリアクション集計を5日後に実行
 async def schedule_reaction_summary(thread, message):
     await asyncio.sleep(5 * 24 * 60 * 60)
     await thread.send("5日後のリアクション集計です。")
 
+# メッセージを削除するコマンド
 @bot.command()
 async def 終了(ctx, message_id: int):
     if ctx.author.id not in AUTHORIZED_USER_IDS:
