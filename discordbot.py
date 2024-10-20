@@ -23,6 +23,9 @@ AUTHORIZED_USER_IDS = [822460191118721034, 302778094320615425]
 # ボタンの選択肢
 reaction_options = ["すごくいい人", "いい人", "微妙な人", "やばい人"]
 
+# ボタンを押したユーザーのスレッドを追跡する辞書
+user_threads = {}
+
 # Bot設定
 bot = commands.Bot(command_prefix='!', intents=intents)
 
@@ -60,12 +63,8 @@ class CommentModal(Modal):
         self.add_item(self.comment)
 
     async def on_submit(self, interaction: discord.Interaction):
-        # スレッド作成チャンネルでスレッドを作成
-        thread_parent_channel = bot.get_channel(THREAD_PARENT_CHANNEL_ID)
-        thread = await thread_parent_channel.create_thread(
-            name=f"{self.user.display_name}のリアクション投票スレッド",
-            auto_archive_duration=10080  # 7日
-        )
+        # 既存のスレッドを取得
+        thread = user_threads.get(self.user.id)
 
         # ボタンを押したユーザー情報とコメントをEmbedでスレッドに転記
         embed = discord.Embed(color=discord.Color.green())
@@ -81,6 +80,7 @@ class CommentModal(Modal):
             inline=False
         )
 
+        # スレッドにメッセージを送信
         await thread.send(embed=embed)
         await interaction.response.send_message(f"あなたのコメントがスレッドに転記されました！", ephemeral=True)
 
@@ -112,6 +112,16 @@ async def on_message(message):
         embed = create_user_embed(message.author)
         sent_message = await destination_channel.send(embed=embed, view=create_reaction_view(message.author))
         print(f"メッセージが転記されました: {sent_message.id}")  # デバッグ用ログ
+
+        # スレッド作成
+        thread_parent_channel = bot.get_channel(THREAD_PARENT_CHANNEL_ID)
+        thread = await thread_parent_channel.create_thread(
+            name=f"{message.author.display_name}のリアクション投票スレッド",
+            auto_archive_duration=10080  # 7日
+        )
+
+        # ユーザーIDをキーとしてスレッドを保存
+        user_threads[message.author.id] = thread
 
 # メッセージを削除するコマンド
 @bot.command()
