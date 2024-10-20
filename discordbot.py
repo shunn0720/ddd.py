@@ -29,36 +29,22 @@ user_threads = {}
 # Bot設定
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-# ユーザー情報を転記するembedを作成
-def create_user_embed(user: discord.Member):
-    embed = discord.Embed(color=discord.Color.blue())
-    embed.set_author(name=user.display_name, icon_url=user.avatar.url)
-    embed.add_field(
-        name="🌱つぼみ審査投票フォーム",
-        value=(
-            "必ずこのｻｰﾊｰでお話した上で投票をお願いします。\n"
-            "複数回投票した場合は、最新のものを反映します。\n"
-            "この方の入場について、NG等意見のある方はお問い合わせください。"
-        ),
-        inline=False
-    )
-    return embed
-
 # コメントを入力するためのモーダル
 class CommentModal(Modal):
     def __init__(self, label, user, interaction):
-        super().__init__(title="コメントを入力してください")
+        # モーダルのタイトルを「投票画面」に変更
+        super().__init__(title="投票画面")
 
         self.label = label
         self.user = user
         self.interaction = interaction
 
-        # コメント入力フィールドを追加
+        # コメント入力フィールドのプレースホルダーを変更し、必須ではなくする
         self.comment = TextInput(
             label="コメント",
             style=discord.TextStyle.paragraph,
-            placeholder="コメントを入力してください",
-            required=True
+            placeholder="理由がある場合はこちらに入力してください（そのまま送信も可）",
+            required=False  # 入力を必須にしない
         )
         self.add_item(self.comment)
 
@@ -74,7 +60,7 @@ class CommentModal(Modal):
 
         # ボタンを押したユーザー情報とコメントをEmbedでスレッドに転記
         embed = discord.Embed(color=discord.Color.green())
-        embed.set_author(name=self.user.display_name, icon_url=self.user.avatar.url)
+        embed.set_author(name=interaction.user.display_name, icon_url=interaction.user.avatar.url)  # ボタンを押した人の情報を使用
         embed.add_field(
             name="リアクション結果",
             value=f"{interaction.user.display_name} が '{self.label}' を押しました。",
@@ -82,14 +68,14 @@ class CommentModal(Modal):
         )
         embed.add_field(
             name="コメント",
-            value=self.comment.value,  # 入力されたコメントをここに表示
+            value=self.comment.value if self.comment.value else "コメントなし",  # コメントが空の場合「コメントなし」と表示
             inline=False
         )
 
         # スレッドにメッセージを送信
         await thread.send(embed=embed)
-        print(f"スレッドにコメントが転記されました: {self.user.display_name}")
-        await interaction.response.send_message(f"あなたのコメントがスレッドに転記されました！", ephemeral=True)
+        print(f"スレッドにコメントが転記されました: {interaction.user.display_name}")
+        await interaction.response.send_message(f"投票ありがとなっつ！", ephemeral=True)
 
 # ボタンをクリックしたときの処理
 class ReactionButton(Button):
@@ -117,8 +103,19 @@ async def on_message(message):
     if message.channel.id in SOURCE_CHANNEL_IDS and not message.author.bot:
         destination_channel = bot.get_channel(DESTINATION_CHANNEL_ID)
 
-        # ユーザー情報のEmbedを作成して転記
-        embed = create_user_embed(message.author)
+        # メッセージの送信者のEmbedを作成して転記
+        embed = discord.Embed(color=discord.Color.blue())
+        embed.set_author(name=message.author.display_name, icon_url=message.author.avatar.url)
+        embed.add_field(
+            name="🌱つぼみ審査投票フォーム",
+            value=(
+                "必ずこのｻｰﾊﾞｰでお話した上で投票をお願いします。\n"
+                "複数回投票した場合は、最新のものを反映します。\n"
+                "この方の入場について、NG等意見のある方はお問い合わせください。"
+            ),
+            inline=False
+        )
+
         sent_message = await destination_channel.send(embed=embed, view=create_reaction_view(message.author))
         print(f"メッセージが転記されました: {sent_message.id}")  # デバッグ用ログ
 
