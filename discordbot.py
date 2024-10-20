@@ -36,7 +36,7 @@ def create_user_embed(user: discord.Member):
     embed.add_field(
         name="🌱つぼみ審査投票フォーム",
         value=(
-            "必ずこのｻｰﾊﾞｰでお話した上で投票をお願いします。\n"
+            "必ずこのｻｰﾊｰでお話した上で投票をお願いします。\n"
             "複数回投票した場合は、最新のものを反映します。\n"
             "この方の入場について、NG等意見のある方はお問い合わせください。"
         ),
@@ -98,13 +98,11 @@ class ReactionButton(Button):
         self.user = user
 
     async def callback(self, interaction: discord.Interaction):
-        # 応答を遅延させてエラーを防ぐ
-        await interaction.response.defer()
         print(f"{interaction.user.display_name} が '{self.label}' ボタンを押しました。")
-
+        
         # コメントを入力するためのモーダルを表示
         modal = CommentModal(label=self.label, user=self.user, interaction=interaction)
-        await interaction.response.send_modal(modal)
+        await interaction.response.send_modal(modal)  # モーダルを表示して応答
 
 # Viewにボタンを追加
 def create_reaction_view(user):
