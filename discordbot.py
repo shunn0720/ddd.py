@@ -66,6 +66,11 @@ class CommentModal(Modal):
         # 既存のスレッドを取得
         thread = user_threads.get(self.user.id)
 
+        if thread is None:
+            print(f"スレッドが見つかりません: {self.user.display_name}")
+            await interaction.response.send_message("スレッドが見つかりませんでした。", ephemeral=True)
+            return
+
         # ボタンを押したユーザー情報とコメントをEmbedでスレッドに転記
         embed = discord.Embed(color=discord.Color.green())
         embed.set_author(name=self.user.display_name, icon_url=self.user.avatar.url)
@@ -82,6 +87,7 @@ class CommentModal(Modal):
 
         # スレッドにメッセージを送信
         await thread.send(embed=embed)
+        print(f"スレッドにコメントが転記されました: {self.user.display_name}")
         await interaction.response.send_message(f"あなたのコメントがスレッドに転記されました！", ephemeral=True)
 
 # ボタンをクリックしたときの処理
@@ -118,13 +124,15 @@ async def on_message(message):
 
         # スレッド作成
         thread_parent_channel = bot.get_channel(THREAD_PARENT_CHANNEL_ID)
-        thread = await thread_parent_channel.create_thread(
-            name=f"{message.author.display_name}のリアクション投票スレッド",
-            auto_archive_duration=10080  # 7日
-        )
-
-        # ユーザーIDをキーとしてスレッドを保存
-        user_threads[message.author.id] = thread
+        try:
+            thread = await thread_parent_channel.create_thread(
+                name=f"{message.author.display_name}のリアクション投票スレッド",
+                auto_archive_duration=10080  # 7日
+            )
+            user_threads[message.author.id] = thread
+            print(f"スレッドが作成されました: {thread.id} for {message.author.display_name}")  # デバッグ用ログ
+        except Exception as e:
+            print(f"スレッド作成に失敗しました: {e}")
 
 # メッセージを削除するコマンド
 @bot.command()
