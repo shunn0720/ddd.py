@@ -59,14 +59,17 @@ async def on_message(message):
             inline=False
         )
 
+        # メッセージを送信してからメッセージIDを取得
         sent_message = await destination_channel.send(embed=embed, view=create_reaction_view())
+        sent_message_id = sent_message.id
+        print(f"メッセージ送信成功: {sent_message_id}")  # メッセージIDの確認用ログ
 
         # スレッドを作成
         try:
             thread_parent_channel = bot.get_channel(THREAD_PARENT_CHANNEL_ID)
             thread = await thread_parent_channel.create_thread(
                 name=f"{message.author.display_name}のリアクション投票",
-                message=sent_message,
+                message=sent_message,  # メッセージオブジェクトを渡す
                 auto_archive_duration=10080  # 7日
             )
             await schedule_reaction_summary(thread, sent_message)
