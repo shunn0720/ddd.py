@@ -43,10 +43,9 @@ def create_user_embed(user: discord.Member):
 
 # ボタンをクリックしたときの処理
 class ReactionButton(Button):
-    def __init__(self, label, user, sent_message):
+    def __init__(self, label, user):
         super().__init__(label=label, style=discord.ButtonStyle.primary)
         self.user = user
-        self.sent_message = sent_message
 
     async def callback(self, interaction: discord.Interaction):
         # チャンネルID 1288732448900775958 にスレッドを作成し、誰がどのボタンを押したかEmbedで表示
@@ -69,10 +68,10 @@ class ReactionButton(Button):
         await interaction.response.send_message(f"{interaction.user.display_name} は '{self.label}' を選びました！", ephemeral=True)
 
 # Viewにボタンを追加
-def create_reaction_view(user, sent_message):
+def create_reaction_view(user):
     view = View()
     for option in reaction_options:
-        view.add_item(ReactionButton(label=option, user=user, sent_message=sent_message))
+        view.add_item(ReactionButton(label=option, user=user))
     return view
 
 # on_message イベントでメッセージを転記
@@ -83,7 +82,8 @@ async def on_message(message):
 
         # ユーザー情報のEmbedを作成して転記
         embed = create_user_embed(message.author)
-        sent_message = await destination_channel.send(embed=embed, view=create_reaction_view(message.author, sent_message))
+        sent_message = await destination_channel.send(embed=embed, view=create_reaction_view(message.author))
+        print(f"メッセージが転記されました: {sent_message.id}")  # デバッグ用ログ
 
 # メッセージを削除するコマンド
 @bot.command()
