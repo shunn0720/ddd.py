@@ -136,7 +136,7 @@ class DeleteButton(Button):
 
 # Viewにボタンを追加
 def create_reaction_view(user, message_id):
-    view = View()
+    view = View(timeout=None)  # タイムアウトを無効にする
     for option in reaction_options:
         view.add_item(ReactionButton(label=option["label"], color=option["color"], user=user))
     view.add_item(DeleteButton(message_id=message_id))  # 削除ボタンを最後に追加
@@ -161,8 +161,12 @@ async def on_message(message):
             inline=False
         )
 
-        sent_message = await destination_channel.send(embed=embed, view=create_reaction_view(message.author, message.id))
+        sent_message = await destination_channel.send(embed=embed)
         print(f"メッセージが転記されました: {sent_message.id}")  # デバッグ用ログ
+
+        # Viewを作成してメッセージに追加
+        view = create_reaction_view(message.author, sent_message.id)
+        await sent_message.edit(view=view)
 
         # スレッド作成
         thread_parent_channel = bot.get_channel(THREAD_PARENT_CHANNEL_ID)
