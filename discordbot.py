@@ -113,7 +113,7 @@ class ReactionButton(Button):
 # 削除ボタンをクリックしたときの処理
 class DeleteButton(Button):
     def __init__(self, message_id):
-        super().__init__(label="削除", style=discord.ButtonStyle.danger)
+        super().__init__(label="削除", style=discord.ButtonStyle.danger)  # 削除ボタンの色を赤に設定
         self.message_id = message_id
 
     async def callback(self, interaction: discord.Interaction):
@@ -139,7 +139,7 @@ def create_reaction_view(user, message_id):
     view = View()
     for option in reaction_options:
         view.add_item(ReactionButton(label=option["label"], color=option["color"], user=user))
-    view.add_item(DeleteButton(message_id=message_id))
+    view.add_item(DeleteButton(message_id=message_id))  # 削除ボタンを最後に追加
     return view
 
 # on_message イベントでメッセージを転記
