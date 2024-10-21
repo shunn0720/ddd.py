@@ -110,11 +110,36 @@ class ReactionButton(Button):
             print(f"エラーが発生しました: {e}")
             await interaction.response.send_message("エラーが発生しました。再度お試しください。", ephemeral=True)
 
+# 削除ボタンをクリックしたときの処理
+class DeleteButton(Button):
+    def __init__(self, message_id):
+        super().__init__(label="削除", style=discord.ButtonStyle.danger)
+        self.message_id = message_id
+
+    async def callback(self, interaction: discord.Interaction):
+        if interaction.user.id not in AUTHORIZED_USER_IDS:
+            await interaction.response.send_message("このボタンを押す権限がありません。", ephemeral=True)
+            return
+
+        try:
+            channel = bot.get_channel(DESTINATION_CHANNEL_ID)
+            message = await channel.fetch_message(self.message_id)
+            await message.delete()
+            await interaction.response.send_message(f"メッセージID {self.message_id} を削除しました。", ephemeral=True)
+
+        except discord.NotFound:
+            await interaction.response.send_message("指定されたメッセージが見つかりません。", ephemeral=True)
+        except discord.Forbidden:
+            await interaction.response.send_message("このメッセージを削除する権限がありません。", ephemeral=True)
+        except discord.HTTPException as e:
+            await interaction.response.send_message(f"メッセージの削除に失敗しました: {str(e)}", ephemeral=True)
+
 # Viewにボタンを追加
-def create_reaction_view(user):
+def create_reaction_view(user, message_id):
     view = View()
     for option in reaction_options:
         view.add_item(ReactionButton(label=option["label"], color=option["color"], user=user))
+    view.add_item(DeleteButton(message_id=message_id))
     return view
 
 # on_message イベントでメッセージを転記
@@ -136,7 +161,7 @@ async def on_message(message):
             inline=False
         )
 
-        sent_message = await destination_channel.send(embed=embed, view=create_reaction_view(message.author))
+        sent_message = await destination_channel.send(embed=embed, view=create_reaction_view(message.author, message.id))
         print(f"メッセージが転記されました: {sent_message.id}")  # デバッグ用ログ
 
         # スレッド作成
@@ -150,26 +175,6 @@ async def on_message(message):
             print(f"スレッドが作成されました: {thread.id} for {message.author.display_name}")  # デバッグ用ログ
         except Exception as e:
             print(f"スレッド作成に失敗しました: {e}")
-
-# メッセージを削除するコマンド
-@bot.command()
-async def 終了(ctx, message_id: int):
-    if ctx.author.id not in AUTHORIZED_USER_IDS:
-        await ctx.send("このコマンドを実行する権限がありません。")
-        return
-
-    try:
-        channel = bot.get_channel(DESTINATION_CHANNEL_ID)
-        message = await channel.fetch_message(message_id)
-        await message.delete()
-        await ctx.send(f"メッセージID {message_id} を削除しました。")
-
-    except discord.NotFound:
-        await ctx.send("指定されたメッセージが見つかりません。")
-    except discord.Forbidden:
-        await ctx.send("このメッセージを削除する権限がありません。")
-    except discord.HTTPException as e:
-        await ctx.send(f"メッセージの削除に失敗しました: {str(e)}")
 
 # Botの起動
 bot.run(TOKEN)
