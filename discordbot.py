@@ -55,7 +55,7 @@ class CommentModal(Modal):
 
         if thread is None:
             print(f"スレッドが見つかりません: {self.user.display_name}")
-            await interaction.response.send_message("スレッドが見つかりませんでした。", ephemeral=True)
+            await interaction.followup.send("スレッドが見つかりませんでした。", ephemeral=True)
             return
 
         # ボタンを押したユーザー情報とコメントをEmbedでスレッドに転記
@@ -80,7 +80,7 @@ class CommentModal(Modal):
         print(f"スレッドにコメントが転記されました: {interaction.user.display_name}")
 
         # 応答メッセージの文言を「投票ありがとなっつ！」に変更
-        await interaction.response.send_message(f"投票ありがとなっつ！", ephemeral=True)
+        await interaction.followup.send(f"投票ありがとなっつ！", ephemeral=True)
 
 # ボタンをクリックしたときの処理
 class ReactionButton(Button):
@@ -91,14 +91,17 @@ class ReactionButton(Button):
     async def callback(self, interaction: discord.Interaction):
         try:
             print(f"{interaction.user.display_name} が '{self.label}' ボタンを押しました。")
-            
-            # コメントを入力するためのモーダルを表示
-            modal = CommentModal(label=self.label, user=self.user, interaction=interaction)
-            
-            # モーダルを送信し、応答
-            await interaction.response.send_modal(modal)
-        except discord.InteractionResponded:
-            print(f"インタラクションに既に応答済みです: {interaction.user.display_name}")
+
+            # インタラクションが最初の場合はモーダルを表示
+            if not interaction.response.is_done():
+                # コメントを入力するためのモーダルを表示
+                modal = CommentModal(label=self.label, user=self.user, interaction=interaction)
+
+                # モーダルを送信し、応答
+                await interaction.response.send_modal(modal)
+            else:
+                # 2回目以降の場合はフォローアップでメッセージを送信
+                await interaction.followup.send("既にモーダルが表示されています。", ephemeral=True)
         except Exception as e:
             print(f"エラーが発生しました: {e}")
 
