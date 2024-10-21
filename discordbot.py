@@ -63,7 +63,7 @@ class CommentModal(Modal):
             embed = discord.Embed(color=discord.Color.green())
 
             # ボタンを押したユーザーの名前とアイコンを表示
-            embed.set_author(name=interaction.user.display_name, icon_url=interaction.user.avatar.url)
+            embed.set_author(name=interaction.user.display_name, icon_url=interaction.user.display_avatar.url)
 
             embed.add_field(
                 name="リアクション結果",
@@ -85,7 +85,10 @@ class CommentModal(Modal):
 
         except Exception as e:
             print(f"エラーが発生しました: {e}")
-            await interaction.response.send_message("エラーが発生しました。再度お試しください。", ephemeral=True)
+            if not interaction.response.is_done():
+                await interaction.response.send_message("エラーが発生しました。再度お試しください。", ephemeral=True)
+            else:
+                await interaction.followup.send("エラーが発生しました。再度お試しください。", ephemeral=True)
 
 # ボタンをクリックしたときの処理
 class ReactionButton(Button):
@@ -98,18 +101,16 @@ class ReactionButton(Button):
             print(f"{interaction.user.display_name} が '{self.label}' ボタンを押しました。")
 
             # インタラクションが最初の場合はモーダルを表示
-            if not interaction.response.is_done():
-                # コメントを入力するためのモーダルを表示
-                modal = CommentModal(label=self.label, user=self.user, interaction=interaction)
+            modal = CommentModal(label=self.label, user=self.user, interaction=interaction)
 
-                # モーダルを送信し、応答
-                await interaction.response.send_modal(modal)
-            else:
-                # 2回目以降の場合はフォローアップでメッセージを送信
-                await interaction.followup.send("既にモーダルが表示されています。", ephemeral=True)
+            # モーダルを送信し、応答
+            await interaction.response.send_modal(modal)
         except Exception as e:
             print(f"エラーが発生しました: {e}")
-            await interaction.followup.send("エラーが発生しました。再度お試しください。", ephemeral=True)
+            if not interaction.response.is_done():
+                await interaction.response.send_message("エラーが発生しました。再度お試しください。", ephemeral=True)
+            else:
+                await interaction.followup.send("エラーが発生しました。再度お試しください。", ephemeral=True)
 
 # Viewにボタンを追加
 def create_reaction_view(user):
@@ -126,12 +127,14 @@ async def on_message(message):
 
         # メッセージの送信者のEmbedを作成して転記
         embed = discord.Embed(color=discord.Color.blue())
-        embed.set_author(name=message.author.display_name, icon_url=message.author.avatar.url)
+        embed.set_author(name=message.author.display_name, icon_url=message.author.display_avatar.url)
         embed.add_field(
             name="🌱つぼみ審査投票フォーム",
             value=(
-                "必ずこのサーバーでお話した上で投票をお願いします。\n"
-                "複数回投票した場合は、最新のものを反映します。\n"
+                "必ずこのサーバーでお話した上で投票をお願いします。
+"
+                "複数回投票した場合は、最新のものを反映します。
+"
                 "この方の入場について、NG等意見のある方はお問い合わせください。"
             ),
             inline=False
