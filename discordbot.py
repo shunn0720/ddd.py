@@ -21,7 +21,12 @@ THREAD_PARENT_CHANNEL_ID = 1288732448900775958  # ここにスレッドを作成
 AUTHORIZED_USER_IDS = [822460191118721034, 302778094320615425]
 
 # ボタンの選択肢
-reaction_options = ["入ってほしい！", "良い人", "微妙", "入ってほしくない"]
+reaction_options = [
+    {"label": "入ってほしい！（2点）", "color": discord.Color.green(), "score": 2},
+    {"label": "良い人！（1点）", "color": discord.Color.green(), "score": 1},
+    {"label": "微妙（-1点）", "color": discord.Color.red(), "score": -1},
+    {"label": "入ってほしくない（-2点）", "color": discord.Color.red(), "score": -2}
+]
 
 # ボタンを押したユーザーのスレッドを追跡する辞書
 user_threads = {}
@@ -31,11 +36,12 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 
 # コメントを入力するためのモーダル
 class CommentModal(Modal):
-    def __init__(self, label, user, interaction):
+    def __init__(self, label, color, user, interaction):
         # モーダルのタイトルを「投票画面」に変更
         super().__init__(title="投票画面")
 
         self.label = label
+        self.color = color
         self.user = user
         self.interaction = interaction
 
@@ -60,7 +66,7 @@ class CommentModal(Modal):
                 return
 
             # ボタンを押したユーザー情報とコメントをEmbedでスレッドに転記
-            embed = discord.Embed(color=discord.Color.green())
+            embed = discord.Embed(color=self.color)
 
             # ボタンを押したユーザーの名前とアイコンを表示
             embed.set_author(name=interaction.user.display_name, icon_url=interaction.user.display_avatar.url)
@@ -92,8 +98,10 @@ class CommentModal(Modal):
 
 # ボタンをクリックしたときの処理
 class ReactionButton(Button):
-    def __init__(self, label, user):
+    def __init__(self, label, color, user):
         super().__init__(label=label, style=discord.ButtonStyle.primary)
+        self.label = label
+        self.color = color
         self.user = user
 
     async def callback(self, interaction: discord.Interaction):
@@ -101,7 +109,7 @@ class ReactionButton(Button):
             print(f"{interaction.user.display_name} が '{self.label}' ボタンを押しました。")
 
             # インタラクションが最初の場合はモーダルを表示
-            modal = CommentModal(label=self.label, user=self.user, interaction=interaction)
+            modal = CommentModal(label=self.label, color=self.color, user=self.user, interaction=interaction)
 
             # モーダルを送信し、応答
             await interaction.response.send_modal(modal)
@@ -116,7 +124,7 @@ class ReactionButton(Button):
 def create_reaction_view(user):
     view = View()
     for option in reaction_options:
-        view.add_item(ReactionButton(label=option, user=user))
+        view.add_item(ReactionButton(label=option["label"], color=option["color"], user=user))
     return view
 
 # on_message イベントでメッセージを転記
