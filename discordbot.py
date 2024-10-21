@@ -43,7 +43,6 @@ class CommentModal(Modal):
         self.label = label
         self.color = color
         self.user = user
-        self.interaction = interaction
 
         # コメント入力フィールドのプレースホルダーを変更し、必須ではなくする
         self.comment = TextInput(
@@ -62,7 +61,11 @@ class CommentModal(Modal):
 
             if thread is None:
                 print(f"スレッドが見つかりません: {self.user.display_name}")
-                await interaction.response.send_message("スレッドが見つかりませんでした。", ephemeral=True)
+                # 応答が完了していない場合にエラーメッセージを送信
+                if not interaction.response.is_done():
+                    await interaction.response.send_message("スレッドが見つかりませんでした。", ephemeral=True)
+                else:
+                    await interaction.followup.send("スレッドが見つかりませんでした。", ephemeral=True)
                 return
 
             # ボタンを押したユーザー情報とコメントをEmbedでスレッドに転記
@@ -87,7 +90,10 @@ class CommentModal(Modal):
             print(f"スレッドにコメントが転記されました: {interaction.user.display_name}")
 
             # 応答メッセージを送信
-            await interaction.response.send_message(f"投票ありがとなっつ！", ephemeral=True)
+            if not interaction.response.is_done():
+                await interaction.response.send_message(f"投票ありがとなっつ！", ephemeral=True)
+            else:
+                await interaction.followup.send(f"投票ありがとなっつ！", ephemeral=True)
 
         except Exception as e:
             print(f"エラーが発生しました: {e}")
@@ -108,13 +114,17 @@ class ReactionButton(Button):
         try:
             print(f"{interaction.user.display_name} が '{self.label}' ボタンを押しました。")
 
-            # インタラクションが最初の場合はモーダルを表示
-            modal = CommentModal(label=self.label, color=self.color, user=self.user, interaction=interaction)
+            # インタラクションが実行されていない場合のみモーダルを表示
+            if not interaction.response.is_done():
+                modal = CommentModal(label=self.label, color=self.color, user=self.user, interaction=interaction)
+                await interaction.response.send_modal(modal)
+            else:
+                # すでに実行済みの場合はフォローアップでメッセージを送信
+                await interaction.followup.send("すでにモーダルが表示されています。", ephemeral=True)
 
-            # モーダルを送信し、応答
-            await interaction.response.send_modal(modal)
         except Exception as e:
             print(f"エラーが発生しました: {e}")
+            # 応答が完了していない場合にエラーメッセージを送信
             if not interaction.response.is_done():
                 await interaction.response.send_message("エラーが発生しました。再度お試しください。", ephemeral=True)
             else:
