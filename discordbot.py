@@ -14,7 +14,7 @@ TOKEN = os.getenv('DISCORD_TOKEN')
 
 # チャンネルIDを設定
 SOURCE_CHANNEL_IDS = [1282174861996724295, 1282174893290557491]
-DESTINATION_CHANNEL_ID = 1289802546180784240  # ここに転記されたユーザー情報が表示
+DESTINATION_CHANNEL_ID = 1297748876735942738  # ここに転記されたユーザー情報が表示
 THREAD_PARENT_CHANNEL_ID = 1288732448900775958  # ここにスレッドを作成
 
 # コマンド実行を許可するユーザーID
@@ -43,7 +43,7 @@ class CommentModal(Modal):
         self.comment = TextInput(
             label="コメント",
             style=discord.TextStyle.paragraph,
-            placeholder="理由がある場合はこちらに入力してください（そのまま送信も可）",
+            placeholder="理由がある場合はこちらに入力してください（そのまま送信も可）",  # プレースホルダーを変更
             required=False  # 入力を必須にしない
         )
         self.add_item(self.comment)
@@ -60,7 +60,10 @@ class CommentModal(Modal):
 
         # ボタンを押したユーザー情報とコメントをEmbedでスレッドに転記
         embed = discord.Embed(color=discord.Color.green())
-        embed.set_author(name=interaction.user.display_name, icon_url=interaction.user.avatar.url)  # ボタンを押した人の情報を使用
+
+        # ボタンを押したユーザーの名前とアイコンを表示
+        embed.set_author(name=interaction.user.display_name, icon_url=interaction.user.avatar.url)  # ボタンを押したユーザーに変更
+
         embed.add_field(
             name="リアクション結果",
             value=f"{interaction.user.display_name} が '{self.label}' を押しました。",
@@ -75,6 +78,8 @@ class CommentModal(Modal):
         # スレッドにメッセージを送信
         await thread.send(embed=embed)
         print(f"スレッドにコメントが転記されました: {interaction.user.display_name}")
+
+        # 応答メッセージの文言を「投票ありがとなっつ！」に変更
         await interaction.response.send_message(f"投票ありがとなっつ！", ephemeral=True)
 
 # ボタンをクリックしたときの処理
@@ -84,11 +89,18 @@ class ReactionButton(Button):
         self.user = user
 
     async def callback(self, interaction: discord.Interaction):
-        print(f"{interaction.user.display_name} が '{self.label}' ボタンを押しました。")
-        
-        # コメントを入力するためのモーダルを表示
-        modal = CommentModal(label=self.label, user=self.user, interaction=interaction)
-        await interaction.response.send_modal(modal)  # モーダルを表示して応答
+        try:
+            print(f"{interaction.user.display_name} が '{self.label}' ボタンを押しました。")
+            
+            # コメントを入力するためのモーダルを表示
+            modal = CommentModal(label=self.label, user=self.user, interaction=interaction)
+            
+            # モーダルを送信し、応答
+            await interaction.response.send_modal(modal)
+        except discord.InteractionResponded:
+            print(f"インタラクションに既に応答済みです: {interaction.user.display_name}")
+        except Exception as e:
+            print(f"エラーが発生しました: {e}")
 
 # Viewにボタンを追加
 def create_reaction_view(user):
