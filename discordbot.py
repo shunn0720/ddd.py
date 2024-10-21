@@ -90,7 +90,7 @@ class CommentModal(Modal):
 
         except Exception as e:
             print(f"エラーが発生しました: {e}")
-            await interaction.response.send_message("エラーが発生しました。再度お試しください。", ephemeral=True)
+            await interaction.response.send_message(f"エラーが発生しました: {str(e)}", ephemeral=True)
 
 # ボタンをクリックしたときの処理
 class ReactionButton(Button):
@@ -108,7 +108,7 @@ class ReactionButton(Button):
 
         except Exception as e:
             print(f"エラーが発生しました: {e}")
-            await interaction.response.send_message("エラーが発生しました。再度お試しください。", ephemeral=True)
+            await interaction.response.send_message(f"エラーが発生しました: {str(e)}", ephemeral=True)
 
 # 削除ボタンをクリックしたときの処理
 class DeleteButton(Button):
@@ -122,7 +122,7 @@ class DeleteButton(Button):
             return
 
         try:
-            channel = bot.get_channel(DESTINATION_CHANNEL_ID)
+            channel = interaction.channel
             message = await channel.fetch_message(self.message_id)
             await message.delete()
             await interaction.response.send_message(f"メッセージID {self.message_id} を削除しました。", ephemeral=True)
