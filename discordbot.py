@@ -43,7 +43,7 @@ class CommentModal(Modal):
         self.comment = TextInput(
             label="コメント",
             style=discord.TextStyle.paragraph,
-            placeholder="理由がある場合はこちらに入力してください（そのまま送信も可）",  # プレースホルダーを変更
+            placeholder="理由がある場合はこちらに入力してください（そのまま送信も可）",
             required=False  # 入力を必須にしない
         )
         self.add_item(self.comment)
@@ -56,14 +56,14 @@ class CommentModal(Modal):
 
             if thread is None:
                 print(f"スレッドが見つかりません: {self.user.display_name}")
-                await interaction.followup.send("スレッドが見つかりませんでした。", ephemeral=True)
+                await interaction.response.send_message("スレッドが見つかりませんでした。", ephemeral=True)
                 return
 
             # ボタンを押したユーザー情報とコメントをEmbedでスレッドに転記
             embed = discord.Embed(color=discord.Color.green())
 
             # ボタンを押したユーザーの名前とアイコンを表示
-            embed.set_author(name=interaction.user.display_name, icon_url=interaction.user.avatar.url)  # ボタンを押したユーザーに変更
+            embed.set_author(name=interaction.user.display_name, icon_url=interaction.user.avatar.url)
 
             embed.add_field(
                 name="リアクション結果",
@@ -72,7 +72,7 @@ class CommentModal(Modal):
             )
             embed.add_field(
                 name="コメント",
-                value=self.comment.value if self.comment.value else "コメントなし",  # コメントが空の場合「コメントなし」と表示
+                value=self.comment.value if self.comment.value else "コメントなし",
                 inline=False
             )
 
@@ -80,12 +80,12 @@ class CommentModal(Modal):
             await thread.send(embed=embed)
             print(f"スレッドにコメントが転記されました: {interaction.user.display_name}")
 
-            # 応答メッセージの文言を「投票ありがとなっつ！」に変更
-            await interaction.followup.send(f"投票ありがとなっつ！", ephemeral=True)
+            # 応答メッセージを送信
+            await interaction.response.send_message(f"投票ありがとなっつ！", ephemeral=True)
 
         except Exception as e:
             print(f"エラーが発生しました: {e}")
-            await interaction.followup.send("エラーが発生しました。再度お試しください。", ephemeral=True)
+            await interaction.response.send_message("エラーが発生しました。再度お試しください。", ephemeral=True)
 
 # ボタンをクリックしたときの処理
 class ReactionButton(Button):
@@ -130,7 +130,7 @@ async def on_message(message):
         embed.add_field(
             name="🌱つぼみ審査投票フォーム",
             value=(
-                "必ずこのｻｰﾊﾞｰでお話した上で投票をお願いします。\n"
+                "必ずこのサーバーでお話した上で投票をお願いします。\n"
                 "複数回投票した場合は、最新のものを反映します。\n"
                 "この方の入場について、NG等意見のある方はお問い合わせください。"
             ),
