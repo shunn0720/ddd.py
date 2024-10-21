@@ -49,38 +49,43 @@ class CommentModal(Modal):
         self.add_item(self.comment)
 
     async def on_submit(self, interaction: discord.Interaction):
-        print(f"{interaction.user.display_name} が '{self.label}' ボタンを押し、コメントを送信しました。")
-        # 既存のスレッドを取得
-        thread = user_threads.get(self.user.id)
+        try:
+            print(f"{interaction.user.display_name} が '{self.label}' ボタンを押し、コメントを送信しました。")
+            # 既存のスレッドを取得
+            thread = user_threads.get(self.user.id)
 
-        if thread is None:
-            print(f"スレッドが見つかりません: {self.user.display_name}")
-            await interaction.followup.send("スレッドが見つかりませんでした。", ephemeral=True)
-            return
+            if thread is None:
+                print(f"スレッドが見つかりません: {self.user.display_name}")
+                await interaction.followup.send("スレッドが見つかりませんでした。", ephemeral=True)
+                return
 
-        # ボタンを押したユーザー情報とコメントをEmbedでスレッドに転記
-        embed = discord.Embed(color=discord.Color.green())
+            # ボタンを押したユーザー情報とコメントをEmbedでスレッドに転記
+            embed = discord.Embed(color=discord.Color.green())
 
-        # ボタンを押したユーザーの名前とアイコンを表示
-        embed.set_author(name=interaction.user.display_name, icon_url=interaction.user.avatar.url)  # ボタンを押したユーザーに変更
+            # ボタンを押したユーザーの名前とアイコンを表示
+            embed.set_author(name=interaction.user.display_name, icon_url=interaction.user.avatar.url)  # ボタンを押したユーザーに変更
 
-        embed.add_field(
-            name="リアクション結果",
-            value=f"{interaction.user.display_name} が '{self.label}' を押しました。",
-            inline=False
-        )
-        embed.add_field(
-            name="コメント",
-            value=self.comment.value if self.comment.value else "コメントなし",  # コメントが空の場合「コメントなし」と表示
-            inline=False
-        )
+            embed.add_field(
+                name="リアクション結果",
+                value=f"{interaction.user.display_name} が '{self.label}' を押しました。",
+                inline=False
+            )
+            embed.add_field(
+                name="コメント",
+                value=self.comment.value if self.comment.value else "コメントなし",  # コメントが空の場合「コメントなし」と表示
+                inline=False
+            )
 
-        # スレッドにメッセージを送信
-        await thread.send(embed=embed)
-        print(f"スレッドにコメントが転記されました: {interaction.user.display_name}")
+            # スレッドにメッセージを送信
+            await thread.send(embed=embed)
+            print(f"スレッドにコメントが転記されました: {interaction.user.display_name}")
 
-        # 応答メッセージの文言を「投票ありがとなっつ！」に変更
-        await interaction.followup.send(f"投票ありがとなっつ！", ephemeral=True)
+            # 応答メッセージの文言を「投票ありがとなっつ！」に変更
+            await interaction.followup.send(f"投票ありがとなっつ！", ephemeral=True)
+
+        except Exception as e:
+            print(f"エラーが発生しました: {e}")
+            await interaction.followup.send("エラーが発生しました。再度お試しください。", ephemeral=True)
 
 # ボタンをクリックしたときの処理
 class ReactionButton(Button):
@@ -104,6 +109,7 @@ class ReactionButton(Button):
                 await interaction.followup.send("既にモーダルが表示されています。", ephemeral=True)
         except Exception as e:
             print(f"エラーが発生しました: {e}")
+            await interaction.followup.send("エラーが発生しました。再度お試しください。", ephemeral=True)
 
 # Viewにボタンを追加
 def create_reaction_view(user):
