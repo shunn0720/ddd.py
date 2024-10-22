@@ -22,10 +22,10 @@ AUTHORIZED_USER_IDS = [822460191118721034, 302778094320615425]
 
 # ボタンの選択肢
 reaction_options = [
-    {"label": "入ってほしい！（2点）", "color": discord.Color.green(), "score": 2},
-    {"label": "良い人！（1点）", "color": discord.Color.green(), "score": 1},
-    {"label": "微妙（-1点）", "color": discord.Color.red(), "score": -1},
-    {"label": "入ってほしくない（-2点）", "color": discord.Color.red(), "score": -2}
+    {"label": "入ってほしい！", "color": discord.Color.green(), "score": 2},
+    {"label": "良い人！", "color": discord.Color.green(), "score": 1},
+    {"label": "微妙", "color": discord.Color.red(), "score": -1},
+    {"label": "入ってほしくない", "color": discord.Color.red(), "score": -2}
 ]
 
 # ボタンを押したユーザーのスレッドを追跡する辞書
