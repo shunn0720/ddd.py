@@ -175,15 +175,3 @@ async def on_message(message):
 @bot.event
 async def on_ready():
     print(f'Logged in as {bot.user}')
-    
-    # Botが再起動後、Viewを再度アタッチする処理
-    destination_channel = bot.get_channel(DESTINATION_CHANNEL_ID)
-    async for message in destination_channel.history(limit=100):
-        if message.author == bot.user:
-            # 過去のBotのメッセージに再度Viewを設定
-            view = create_reaction_view(message.author, message.id)
-            await message.edit(view=view)
-            print(f"再起動後にViewを再アタッチしました: {message.id}")
-
-# Botの起動
-bot.run(TOKEN)
