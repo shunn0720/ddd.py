@@ -27,6 +27,9 @@ reaction_options = [
     {"label": "入ってほしくない", "color": discord.Color.red(), "score": -2}
 ]
 
+# ボタンを押したユーザーのスレッドを追跡する辞書
+user_threads = {}  # この辞書を追加してスレッドを追跡
+
 # Bot設定
 bot = commands.Bot(command_prefix='!', intents=intents)
 
