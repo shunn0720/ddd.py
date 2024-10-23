@@ -1,7 +1,12 @@
 import discord
 import os
+import logging
 from discord.ext import commands
 from discord.ui import Button, View, Modal, TextInput
+
+# ログの設定
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -28,7 +33,7 @@ reaction_options = [
 ]
 
 # ボタンを押したユーザーのスレッドを追跡する辞書
-user_threads = {}  # この辞書を追加してスレッドを追跡
+user_threads = {}
 
 # Bot設定
 bot = commands.Bot(command_prefix='!', intents=intents)
@@ -68,7 +73,7 @@ class CommentModal(Modal):
             )
             embed.add_field(
                 name="点数",
-                value=f"{self.score}点",  # ここで点数を追加
+                value=f"{self.score}点",  # 点数を追加
                 inline=False
             )
             embed.add_field(
@@ -81,7 +86,17 @@ class CommentModal(Modal):
             await thread.send(embed=embed)
             await interaction.response.send_message(f"投票ありがとなっつ！", ephemeral=True)
 
+        except discord.HTTPException as e:
+            logger.error(f"HTTPエラーが発生しました: {str(e)}")
+            await interaction.response.send_message(f"HTTPエラーが発生しました: {str(e)}", ephemeral=True)
+        except discord.Forbidden:
+            logger.error("操作の権限がありません。")
+            await interaction.response.send_message("この操作を行う権限がありません。", ephemeral=True)
+        except discord.NotFound:
+            logger.error("指定されたリソースが見つかりませんでした。")
+            await interaction.response.send_message("指定されたリソースが見つかりませんでした。", ephemeral=True)
         except Exception as e:
+            logger.error(f"予期しないエラーが発生しました: {str(e)}")
             await interaction.response.send_message(f"エラーが発生しました: {str(e)}", ephemeral=True)
 
 # ボタンをクリックしたときの処理
@@ -99,7 +114,7 @@ class ReactionButton(Button):
 
 # Viewにボタンを追加
 def create_reaction_view(user, message_id):
-    view = View(timeout=None)  # タイムアウトを無効にする
+    view = View(timeout=10080 * 60)  # 7日後にタイムアウト
     for option in reaction_options:
         view.add_item(ReactionButton(label=option["label"], color=option["color"], score=option["score"], user=user))
     return view
@@ -128,7 +143,7 @@ async def on_message(message):
         )
 
         sent_message = await destination_channel.send(embed=embed)
-        print(f"メッセージが転記されました: {sent_message.id}")  # デバッグ用ログ
+        logger.info(f"メッセージが転記されました: {sent_message.id}")  # ログ出力
 
         # Viewを作成してメッセージに追加
         view = create_reaction_view(message.author, sent_message.id)
@@ -142,24 +157,28 @@ async def on_message(message):
                 auto_archive_duration=10080  # 7日
             )
             user_threads[message.author.id] = thread
-            print(f"スレッドが作成されました: {thread.id} for {message.author.display_name}")  # デバッグ用ログ
+            logger.info(f"スレッドが作成されました: {thread.id} for {message.author.display_name}")
         except Exception as e:
-            print(f"スレッド作成に失敗しました: {e}")
+            logger.error(f"スレッド作成に失敗しました: {e}")
 
 # Bot再起動後にViewを再アタッチする処理
 @bot.event
 async def on_ready():
-    print(f'Logged in as {bot.user}')
+    logger.info(f'Logged in as {bot.user}')
     
     destination_channel = bot.get_channel(DESTINATION_CHANNEL_ID)
-    async for message in destination_channel.history(limit=100):
-        if message.author == bot.user:
-            if message.embeds:
-                author = message.embeds[0].author.name
+    async for message in destination_channel.history(limit=20):  # 20件のメッセージのみ取得
+        if message.author == bot.user and message.embeds:
+            try:
+                # メッセージの作者を再取得し、Viewを再アタッチ
+                user_id = int(message.embeds[0].author.icon_url.split('/')[-1].split('.')[0])
+                author = await bot.fetch_user(user_id)
                 if author:
                     view = create_reaction_view(author, message.id)
                     await message.edit(view=view)
-                    print(f"再起動後にViewを再アタッチしました: {message.id}")
+                    logger.info(f"再起動後にViewを再アタッチしました: {message.id}")
+            except Exception as e:
+                logger.error(f"再アタッチに失敗しました: {e}")
 
 # Botの起動
 bot.run(TOKEN)
