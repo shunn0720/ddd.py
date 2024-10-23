@@ -1,13 +1,12 @@
 import discord
-import asyncio
 import os
 from discord.ext import commands
 from discord.ui import Button, View, Modal, TextInput
 
 intents = discord.Intents.default()
-intents.message_content = True  # メッセージ内容の取得に必要
-intents.reactions = True  # リアクションを検知するのに必要
-intents.members = True  # メンバー情報の取得に必要
+intents.message_content = True
+intents.reactions = True
+intents.members = True
 
 # Herokuの環境変数からトークンを取得
 TOKEN = os.getenv('DISCORD_TOKEN')
@@ -28,16 +27,12 @@ reaction_options = [
     {"label": "入ってほしくない", "color": discord.Color.red(), "score": -2}
 ]
 
-# ボタンを押したユーザーのスレッドを追跡する辞書
-user_threads = {}
-
 # Bot設定
 bot = commands.Bot(command_prefix='!', intents=intents)
 
 # コメントを入力するためのモーダル
 class CommentModal(Modal):
     def __init__(self, label, color, score, user, interaction):
-        # モーダルのタイトルを「投票画面」に変更
         super().__init__(title="投票画面")
 
         self.label = label
@@ -45,7 +40,6 @@ class CommentModal(Modal):
         self.score = score
         self.user = user
 
-        # コメント入力フィールドのプレースホルダーを変更し、必須ではなくする
         self.comment = TextInput(
             label="コメント",
             style=discord.TextStyle.paragraph,
@@ -56,21 +50,14 @@ class CommentModal(Modal):
 
     async def on_submit(self, interaction: discord.Interaction):
         try:
-            print(f"{interaction.user.display_name} が '{self.label}' ボタンを押し、コメントを送信しました。")
-            # 既存のスレッドを取得
             thread = user_threads.get(self.user.id)
 
             if thread is None:
-                print(f"スレッドが見つかりません: {self.user.display_name}")
                 await interaction.response.send_message("スレッドが見つかりませんでした。", ephemeral=True)
                 return
 
-            # ボタンを押したユーザー情報とコメントをEmbedでスレッドに転記
             embed = discord.Embed(color=self.color)
-
-            # ボタンを押したユーザーの名前とアイコンを表示
             embed.set_author(name=interaction.user.display_name, icon_url=interaction.user.display_avatar.url)
-
             embed.add_field(
                 name="リアクション結果",
                 value=f"{interaction.user.display_name} が '{self.label}' を押しました。",
@@ -89,17 +76,10 @@ class CommentModal(Modal):
 
             # スレッドにメッセージを送信
             await thread.send(embed=embed)
-            print(f"スレッドにコメントが転記されました: {interaction.user.display_name}")
-
-            # 応答メッセージを送信
             await interaction.response.send_message(f"投票ありがとなっつ！", ephemeral=True)
 
         except Exception as e:
-            print(f"エラーが発生しました: {e}")
-            if not interaction.response.is_done():
-                await interaction.response.send_message("インタラクションに失敗しました。もう一度お試しください。", ephemeral=True)
-            else:
-                await interaction.followup.send("インタラクションに失敗しました。もう一度お試しください。", ephemeral=True)
+            await interaction.response.send_message(f"エラーが発生しました: {str(e)}", ephemeral=True)
 
 # ボタンをクリックしたときの処理
 class ReactionButton(Button):
@@ -111,17 +91,8 @@ class ReactionButton(Button):
         self.user = user
 
     async def callback(self, interaction: discord.Interaction):
-        try:
-            print(f"{interaction.user.display_name} が '{self.label}' ボタンを押しました。")
-            modal = CommentModal(label=self.label, color=self.color, score=self.score, user=self.user, interaction=interaction)
-            await interaction.response.send_modal(modal)
-
-        except Exception as e:
-            print(f"エラーが発生しました: {e}")
-            if not interaction.response.is_done():
-                await interaction.response.send_message("インタラクションに失敗しました。もう一度お試しください。", ephemeral=True)
-            else:
-                await interaction.followup.send("インタラクションに失敗しました。もう一度お試しください。", ephemeral=True)
+        modal = CommentModal(label=self.label, color=self.color, score=self.score, user=self.user, interaction=interaction)
+        await interaction.response.send_modal(modal)
 
 # Viewにボタンを追加
 def create_reaction_view(user, message_id):
@@ -138,7 +109,11 @@ async def on_message(message):
 
         # メッセージの送信者のEmbedを作成して転記
         embed = discord.Embed(color=discord.Color.blue())
-        embed.set_author(name=message.author.display_name, icon_url=message.author.display_avatar.url)
+        embed.set_author(name=message.author.display_name)
+
+        # Embedの右上にアイコンを表示
+        embed.set_thumbnail(url=message.author.display_avatar.url)
+
         embed.add_field(
             name="🌱つぼみ審査投票フォーム",
             value=(
@@ -148,9 +123,6 @@ async def on_message(message):
             ),
             inline=False
         )
-
-        # ユーザーのアイコンを大きくEmbedに表示
-        embed.set_image(url=message.author.display_avatar.url)
 
         sent_message = await destination_channel.send(embed=embed)
         print(f"メッセージが転記されました: {sent_message.id}")  # デバッグ用ログ
@@ -176,12 +148,9 @@ async def on_message(message):
 async def on_ready():
     print(f'Logged in as {bot.user}')
     
-    # Botが再起動後、Viewを再度アタッチする処理
     destination_channel = bot.get_channel(DESTINATION_CHANNEL_ID)
     async for message in destination_channel.history(limit=100):
         if message.author == bot.user:
-            # 過去のBotのメッセージに再度Viewを設定
-            # ここでユーザー情報が必要、メッセージの内容を元に再設定する必要があります。
             if message.embeds:
                 author = message.embeds[0].author.name
                 if author:
