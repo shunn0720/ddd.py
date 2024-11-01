@@ -152,7 +152,12 @@ def create_reaction_view():
 @bot.event
 async def on_message(message):
     if message.channel.id in SOURCE_CHANNEL_IDS and not message.author.bot:
+        logger.info("転記対象メッセージを検出しました")  # ログ追加
         destination_channel = bot.get_channel(DESTINATION_CHANNEL_ID)
+
+        if destination_channel is None:
+            logger.error("転記先のチャンネルが見つかりません")
+            return
 
         # メッセージの送信者のEmbedを作成して転記
         embed = discord.Embed(color=discord.Color.blue())
@@ -174,6 +179,10 @@ async def on_message(message):
 
         # スレッド作成
         thread_parent_channel = bot.get_channel(THREAD_PARENT_CHANNEL_ID)
+        if thread_parent_channel is None:
+            logger.error("スレッド作成先のチャンネルが見つかりません")
+            return
+
         try:
             thread = await thread_parent_channel.create_thread(
                 name=f"{message.author.display_name}のリアクション投票スレッド",
