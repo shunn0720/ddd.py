@@ -9,7 +9,6 @@ from discord.ui import Button, View, Modal, TextInput
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Discordの意図設定
 intents = discord.Intents.default()
 intents.message_content = True
 intents.reactions = True
@@ -19,49 +18,80 @@ intents.members = True
 TOKEN = os.getenv('DISCORD_TOKEN')
 DATABASE_URL = os.getenv('DATABASE_URL')
 
-# データベース接続
+# チャンネルIDを設定
+SOURCE_CHANNEL_IDS = [1299231408551755838, 1299231612944257036]
+DESTINATION_CHANNEL_ID = 1299231533437292596
+THREAD_PARENT_CHANNEL_ID = 1299231693336743996
+
+# データベース接続とテーブル作成
 def get_db_connection():
     return psycopg2.connect(DATABASE_URL, sslmode='require')
 
-# テーブル作成
 def create_table():
     with get_db_connection() as conn:
         with conn.cursor() as cursor:
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS thread_data (
-                    user_id BIGINT PRIMARY KEY,
+                    target_user_id BIGINT PRIMARY KEY,
                     thread_id BIGINT NOT NULL
+                )
+            """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS vote_data (
+                    voter_id BIGINT,
+                    target_user_id BIGINT,
+                    message_id BIGINT,
+                    PRIMARY KEY (voter_id, target_user_id)
                 )
             """)
         conn.commit()
 
-# スレッドデータの保存
-def save_thread_data(user_id, thread_id):
+# スレッドデータの保存と読み込み
+def save_thread_data(target_user_id, thread_id):
     with get_db_connection() as conn:
         with conn.cursor() as cursor:
             cursor.execute("""
-                INSERT INTO thread_data (user_id, thread_id)
+                INSERT INTO thread_data (target_user_id, thread_id)
                 VALUES (%s, %s)
-                ON CONFLICT (user_id) DO UPDATE
+                ON CONFLICT (target_user_id) DO UPDATE
                 SET thread_id = EXCLUDED.thread_id
-            """, (user_id, thread_id))
+            """, (target_user_id, thread_id))
         conn.commit()
 
-# スレッドデータの読み込み
-def load_thread_data(user_id):
+def load_thread_data(target_user_id):
     with get_db_connection() as conn:
         with conn.cursor() as cursor:
-            cursor.execute("SELECT thread_id FROM thread_data WHERE user_id = %s", (user_id,))
+            cursor.execute("SELECT thread_id FROM thread_data WHERE target_user_id = %s", (target_user_id,))
             result = cursor.fetchone()
             return result[0] if result else None
 
+# 投票データの保存と削除
+def save_vote_data(voter_id, target_user_id, message_id):
+    with get_db_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO vote_data (voter_id, target_user_id, message_id)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (voter_id, target_user_id) DO UPDATE
+                SET message_id = EXCLUDED.message_id
+            """, (voter_id, target_user_id, message_id))
+        conn.commit()
+
+def load_vote_data(voter_id, target_user_id):
+    with get_db_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT message_id FROM vote_data WHERE voter_id = %s AND target_user_id = %s", (voter_id, target_user_id))
+            result = cursor.fetchone()
+            return result[0] if result else None
+
+def delete_vote_data(voter_id, target_user_id):
+    with get_db_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("DELETE FROM vote_data WHERE voter_id = %s AND target_user_id = %s", (voter_id, target_user_id))
+        conn.commit()
+
 # ボット設定
 bot = commands.Bot(command_prefix='!', intents=intents)
-
-# チャンネルIDを設定
-SOURCE_CHANNEL_IDS = [1299231408551755838, 1299231612944257036]
-DESTINATION_CHANNEL_ID = 1299231533437292596
-THREAD_PARENT_CHANNEL_ID = 1299231693336743996
 
 # ボタンの選択肢とスコア
 reaction_options = [
@@ -73,9 +103,11 @@ reaction_options = [
 
 # コメントを入力するためのモーダル
 class CommentModal(Modal):
-    def __init__(self, option):
+    def __init__(self, option, target_user, thread):
         super().__init__(title="投票画面")
         self.option = option
+        self.target_user = target_user
+        self.thread = thread
         self.comment = TextInput(
             label="コメント",
             style=discord.TextStyle.paragraph,
@@ -86,18 +118,14 @@ class CommentModal(Modal):
 
     async def on_submit(self, interaction: discord.Interaction):
         try:
-            thread_id = load_thread_data(interaction.user.id)
-
-            if not thread_id:
-                await interaction.response.send_message("スレッドが見つかりませんでした。", ephemeral=True)
-                return
-
-            thread = bot.get_channel(thread_id)
-            if not thread:
-                await interaction.response.send_message("スレッドが見つかりませんでした。", ephemeral=True)
-                return
-
-            embed = discord.Embed(color=self.option['color']) 
+            # 既存の投票がある場合は削除
+            existing_message_id = load_vote_data(interaction.user.id, self.target_user.id)
+            if existing_message_id:
+                existing_message = await self.thread.fetch_message(existing_message_id)
+                await existing_message.delete()
+            
+            # 新しい投票結果をEmbedとして作成
+            embed = discord.Embed(color=self.option['color'])
             embed.set_author(name=interaction.user.display_name, icon_url=interaction.user.display_avatar.url)
             embed.add_field(
                 name="リアクション結果",
@@ -115,54 +143,52 @@ class CommentModal(Modal):
                 inline=False
             )
 
-            # スレッドにメッセージを送信
-            await thread.send(embed=embed)
-            await interaction.response.send_message("投票ありがとうなっつ！", ephemeral=True)
+            # スレッドにメッセージを送信してメッセージIDを保存
+            sent_message = await self.thread.send(embed=embed)
+            save_vote_data(interaction.user.id, self.target_user.id, sent_message.id)
+            await interaction.response.send_message("投票ありがとう！", ephemeral=True)
 
-        except discord.HTTPException as e:
-            logger.error(f"HTTPエラーが発生しました: {str(e)}")
-            await interaction.response.send_message(f"HTTPエラーが発生しました: {str(e)}", ephemeral=True)
-        except discord.Forbidden:
-            logger.error("操作の権限がありません。")
-            await interaction.response.send_message("この操作を行う権限がありません。", ephemeral=True)
-        except discord.NotFound:
-            logger.error("指定されたリソースが見つかりませんでした。")
-            await interaction.response.send_message("指定されたリソースが見つかりませんでした。", ephemeral=True)
         except Exception as e:
-            logger.error(f"予期しないエラーが発生しました: {str(e)}")
-            await interaction.response.send_message(f"エラーが発生しました: {str(e)}", ephemeral=True)
+            logger.error(f"エラーが発生しました: {e}")
+            await interaction.response.send_message("エラーが発生しました。再度お試しください。", ephemeral=True)
 
-# ボタンを作成するクラス
+# ボタンをクリックしたときの処理
 class ReactionButton(Button):
-    def __init__(self, option):
-        super().__init__(label=option["label"], style=discord.ButtonStyle.primary, custom_id=option["custom_id"])
+    def __init__(self, option, target_user):
+        super().__init__(label=option["label"], style=discord.ButtonStyle.primary)
         self.option = option
+        self.target_user = target_user
 
     async def callback(self, interaction: discord.Interaction):
-        await interaction.response.send_modal(CommentModal(self.option))
+        thread_id = load_thread_data(self.target_user.id)
+        if not thread_id:
+            await interaction.response.send_message("スレッドが見つかりませんでした。", ephemeral=True)
+            return
+
+        thread = bot.get_channel(thread_id)
+        if not thread:
+            await interaction.response.send_message("スレッドにアクセスできません。", ephemeral=True)
+            return
+
+        modal = CommentModal(self.option, self.target_user, thread)
+        await interaction.response.send_modal(modal)
 
 # Viewにボタンを追加
-def create_reaction_view():
-    view = View(timeout=10080 * 60)  # 7日後にタイムアウト
+def create_reaction_view(target_user):
+    view = View(timeout=None)
     for option in reaction_options:
-        view.add_item(ReactionButton(option))
+        view.add_item(ReactionButton(option=option, target_user=target_user))
     return view
 
 # on_message イベントでメッセージを転記
 @bot.event
 async def on_message(message):
     if message.channel.id in SOURCE_CHANNEL_IDS and not message.author.bot:
-        logger.info("転記対象メッセージを検出しました")  # ログ追加
         destination_channel = bot.get_channel(DESTINATION_CHANNEL_ID)
-
-        if destination_channel is None:
-            logger.error("転記先のチャンネルが見つかりません")
-            return
 
         # メッセージの送信者のEmbedを作成して転記
         embed = discord.Embed(color=discord.Color.blue())
-        embed.set_author(name=message.author.display_name)
-        embed.set_thumbnail(url=message.author.display_avatar.url)
+        embed.set_author(name=message.author.display_name, icon_url=message.author.display_avatar.url)
         embed.add_field(
             name="🌱つぼみ審査投票フォーム",
             value=(
@@ -173,16 +199,12 @@ async def on_message(message):
             inline=False
         )
 
-        view = create_reaction_view()
+        view = create_reaction_view(message.author)
         sent_message = await destination_channel.send(embed=embed, view=view)
         logger.info(f"メッセージが転記されました: {sent_message.id}")
 
         # スレッド作成
         thread_parent_channel = bot.get_channel(THREAD_PARENT_CHANNEL_ID)
-        if thread_parent_channel is None:
-            logger.error("スレッド作成先のチャンネルが見つかりません")
-            return
-
         try:
             thread = await thread_parent_channel.create_thread(
                 name=f"{message.author.display_name}のリアクション投票スレッド",
@@ -198,7 +220,6 @@ async def on_message(message):
 async def on_ready():
     logger.info(f'Logged in as {bot.user}')
     create_table()  # テーブル作成
-
     destination_channel = bot.get_channel(DESTINATION_CHANNEL_ID)
     async for message in destination_channel.history(limit=20):  
         if message.author == bot.user and message.embeds:
@@ -206,7 +227,7 @@ async def on_ready():
                 user_id = int(message.embeds[0].thumbnail.url.split("/")[4])
                 author = await bot.fetch_user(user_id)
                 if author:
-                    view = create_reaction_view()
+                    view = create_reaction_view(author)
                     await message.edit(view=view)
                     logger.info(f"再起動後にViewを再アタッチしました: {message.id}")
             except Exception as e:
