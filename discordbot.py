@@ -1,7 +1,6 @@
 import discord
 import os
 import logging
-import psycopg2
 from discord.ext import commands
 from discord.ui import Button, View, Modal, TextInput
 
@@ -14,50 +13,16 @@ intents.message_content = True
 intents.reactions = True
 intents.members = True
 
-# Herokuの環境変数からトークンとデータベースURLを取得
+# Herokuの環境変数からトークンを取得
 TOKEN = os.getenv('DISCORD_TOKEN')
-DATABASE_URL = os.getenv('DATABASE_URL')
 
-# チャンネルIDの設定
-SOURCE_CHANNEL_IDS = [1299231408551755838, 1299231612944257036]  # ソースチャンネル
-DESTINATION_CHANNEL_ID = 1299231533437292596  # 転記先チャンネル
-THREAD_PARENT_CHANNEL_ID = 1299231693336743996  # スレッド作成先チャンネル
+# チャンネルIDを設定
+SOURCE_CHANNEL_IDS = [1299231408551755838, 1299231612944257036]
+DESTINATION_CHANNEL_ID = 1299231533437292596  # ここに転記されたユーザー情報が表示
+THREAD_PARENT_CHANNEL_ID = 1299231693336743996  # ここにスレッドを作成
 
-# データベース接続
-def get_db_connection():
-    return psycopg2.connect(DATABASE_URL, sslmode='require')
-
-# テーブル作成
-def create_table():
-    with get_db_connection() as conn:
-        with conn.cursor() as cursor:
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS thread_data (
-                    user_id BIGINT PRIMARY KEY,
-                    thread_id BIGINT NOT NULL
-                )
-            """)
-        conn.commit()
-
-# スレッドデータの保存
-def save_thread_data(user_id, thread_id):
-    with get_db_connection() as conn:
-        with conn.cursor() as cursor:
-            cursor.execute("""
-                INSERT INTO thread_data (user_id, thread_id)
-                VALUES (%s, %s)
-                ON CONFLICT (user_id) DO UPDATE
-                SET thread_id = EXCLUDED.thread_id
-            """, (user_id, thread_id))
-        conn.commit()
-
-# スレッドデータの読み込み
-def load_thread_data(user_id):
-    with get_db_connection() as conn:
-        with conn.cursor() as cursor:
-            cursor.execute("SELECT thread_id FROM thread_data WHERE user_id = %s", (user_id,))
-            result = cursor.fetchone()
-            return result[0] if result else None
+# コマンド実行を許可するユーザーID
+AUTHORIZED_USER_IDS = [822460191118721034, 302778094320615425]
 
 # ボタンの選択肢とスコア
 reaction_options = [
@@ -67,37 +32,18 @@ reaction_options = [
     {"label": "入ってほしくない", "color": discord.Color.red(), "score": -2, "custom_id": "type4"}
 ]
 
+# ボタンを押したユーザーのスレッドを追跡する辞書
+user_threads = {}
+
 # Bot設定
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-# 全てのインタラクションを取得
-@bot.event
-async def on_interaction(interaction:discord.Interaction):
-    try:
-        if interaction.data['component_type'] == 2:
-            await on_button_click(interaction)
-    except KeyError:
-        pass
-
-async def on_button_click(interaction:discord.Interaction):
-    custom_id = interaction.data["custom_id"]
-    if custom_id == "type1":
-        modal = CommentModal(type=0)
-        await interaction.response.send_modal(modal)
-    elif custom_id == "type2":
-        modal = CommentModal(type=1)
-        await interaction.response.send_modal(modal)
-    elif custom_id == "type3":
-        modal = CommentModal(type=2)
-        await interaction.response.send_modal(modal)
-    elif custom_id == "type4":
-        modal = CommentModal(type=3)
-        await interaction.response.send_modal(modal)
-
 # コメントを入力するためのモーダル
 class CommentModal(Modal):
-    def __init__(self, type):
+    def __init__(self, type, user, interaction):
         super().__init__(title="投票画面", custom_id=str(type))
+        self.user = user
+        self.interaction = interaction
         self.comment = TextInput(
             label="コメント",
             style=discord.TextStyle.paragraph,
@@ -109,19 +55,12 @@ class CommentModal(Modal):
     async def on_submit(self, interaction: discord.Interaction):
         try:
             option = reaction_options[int(interaction.data["custom_id"])]
-            thread_id = load_thread_data(interaction.user.id)
-            if thread_id is None:
+            thread = user_threads.get(self.user.id)
+
+            if thread is None:
                 await interaction.response.send_message("スレッドが見つかりませんでした。", ephemeral=True)
                 return
-            thread = bot.get_channel(thread_id)
 
-            # 過去の投票結果を削除
-            async for message in thread.history(limit=100):
-                if message.author == bot.user and interaction.user.display_name in message.content:
-                    await message.delete()
-                    break
-
-            # 新しい投票結果をEmbedで追加
             embed = discord.Embed(color=option['color'])
             embed.set_author(name=interaction.user.display_name, icon_url=interaction.user.display_avatar.url)
             embed.add_field(
@@ -156,6 +95,19 @@ class CommentModal(Modal):
         except Exception as e:
             logger.error(f"予期しないエラーが発生しました: {str(e)}")
             await interaction.response.send_message(f"エラーが発生しました: {str(e)}", ephemeral=True)
+
+# ボタンを作成するクラス
+class ReactionButton(Button):
+    def __init__(self, label, color, score, user, custom_id):
+        super().__init__(label=label, style=discord.ButtonStyle.primary, custom_id=custom_id)
+        self.label = label
+        self.color = color
+        self.score = score
+        self.user = user
+
+    async def callback(self, interaction: discord.Interaction):
+        modal = CommentModal(type=int(self.custom_id[-1]), user=self.user, interaction=interaction)
+        await interaction.response.send_modal(modal)
 
 # Viewにボタンを追加
 def create_reaction_view(user):
@@ -195,7 +147,7 @@ async def on_message(message):
                 name=f"{message.author.display_name}のリアクション投票スレッド",
                 auto_archive_duration=10080  # 7日
             )
-            save_thread_data(message.author.id, thread.id)  # スレッドデータをデータベースに保存
+            user_threads[message.author.id] = thread
             logger.info(f"スレッドが作成されました: {thread.id} for {message.author.display_name}")
         except Exception as e:
             logger.error(f"スレッド作成に失敗しました: {e}")
