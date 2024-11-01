@@ -9,6 +9,7 @@ from discord.ui import Button, View, Modal, TextInput
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Discordの意図設定
 intents = discord.Intents.default()
 intents.message_content = True
 intents.reactions = True
@@ -18,7 +19,12 @@ intents.members = True
 TOKEN = os.getenv('DISCORD_TOKEN')
 DATABASE_URL = os.getenv('DATABASE_URL')
 
-# データベース接続関数
+# チャンネルIDを設定
+SOURCE_CHANNEL_IDS = [1299231408551755838, 1299231612944257036]
+DESTINATION_CHANNEL_ID = 1299231533437292596  # 転記先チャンネルID
+THREAD_PARENT_CHANNEL_ID = 1299231693336743996  # スレッドが作成されるチャンネルID
+
+# データベース接続
 def get_db_connection():
     return psycopg2.connect(DATABASE_URL, sslmode='require')
 
@@ -34,7 +40,7 @@ def create_table():
             """)
         conn.commit()
 
-# スレッドIDを保存
+# スレッドデータの保存
 def save_thread_data(user_id, thread_id):
     with get_db_connection() as conn:
         with conn.cursor() as cursor:
@@ -46,7 +52,7 @@ def save_thread_data(user_id, thread_id):
             """, (user_id, thread_id))
         conn.commit()
 
-# スレッドIDを取得
+# スレッドデータの読み込み
 def load_thread_data(user_id):
     with get_db_connection() as conn:
         with conn.cursor() as cursor:
