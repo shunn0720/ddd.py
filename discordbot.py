@@ -19,11 +19,6 @@ intents.members = True
 TOKEN = os.getenv('DISCORD_TOKEN')
 DATABASE_URL = os.getenv('DATABASE_URL')
 
-# チャンネルIDを設定
-SOURCE_CHANNEL_IDS = [1299231408551755838, 1299231612944257036]
-DESTINATION_CHANNEL_ID = 1299231533437292596  # 転記先チャンネルID
-THREAD_PARENT_CHANNEL_ID = 1299231693336743996  # スレッドが作成されるチャンネルID
-
 # データベース接続
 def get_db_connection():
     return psycopg2.connect(DATABASE_URL, sslmode='require')
@@ -60,8 +55,13 @@ def load_thread_data(user_id):
             result = cursor.fetchone()
             return result[0] if result else None
 
-# Bot設定
+# ボット設定
 bot = commands.Bot(command_prefix='!', intents=intents)
+
+# チャンネルIDを設定
+SOURCE_CHANNEL_IDS = [1299231408551755838, 1299231612944257036]
+DESTINATION_CHANNEL_ID = 1299231533437292596
+THREAD_PARENT_CHANNEL_ID = 1299231693336743996
 
 # ボタンの選択肢とスコア
 reaction_options = [
@@ -73,8 +73,9 @@ reaction_options = [
 
 # コメントを入力するためのモーダル
 class CommentModal(Modal):
-    def __init__(self, type):
-        super().__init__(title="投票画面", custom_id=str(type))
+    def __init__(self, option):
+        super().__init__(title="投票画面")
+        self.option = option
         self.comment = TextInput(
             label="コメント",
             style=discord.TextStyle.paragraph,
@@ -85,7 +86,6 @@ class CommentModal(Modal):
 
     async def on_submit(self, interaction: discord.Interaction):
         try:
-            option = reaction_options[int(interaction.data["custom_id"])]
             thread_id = load_thread_data(interaction.user.id)
 
             if not thread_id:
@@ -97,16 +97,16 @@ class CommentModal(Modal):
                 await interaction.response.send_message("スレッドが見つかりませんでした。", ephemeral=True)
                 return
 
-            embed = discord.Embed(color=option['color']) 
+            embed = discord.Embed(color=self.option['color']) 
             embed.set_author(name=interaction.user.display_name, icon_url=interaction.user.display_avatar.url)
             embed.add_field(
                 name="リアクション結果",
-                value=f"{interaction.user.display_name} が '{option['label']}' を押しました。",
+                value=f"{interaction.user.display_name} が '{self.option['label']}' を押しました。",
                 inline=False
             )
             embed.add_field(
                 name="点数",
-                value=f"{option['score']}点",
+                value=f"{self.option['score']}点",
                 inline=False
             )
             embed.add_field(
@@ -117,7 +117,7 @@ class CommentModal(Modal):
 
             # スレッドにメッセージを送信
             await thread.send(embed=embed)
-            await interaction.response.send_message("投票ありがとう！", ephemeral=True)
+            await interaction.response.send_message("投票ありがとうなっつ！", ephemeral=True)
 
         except discord.HTTPException as e:
             logger.error(f"HTTPエラーが発生しました: {str(e)}")
@@ -134,14 +134,18 @@ class CommentModal(Modal):
 
 # ボタンを作成するクラス
 class ReactionButton(Button):
-    def __init__(self, label, color, score, user, custom_id):
-        super().__init__(label=label, style=discord.ButtonStyle.primary, custom_id=custom_id)
+    def __init__(self, option):
+        super().__init__(label=option["label"], style=discord.ButtonStyle.primary, custom_id=option["custom_id"])
+        self.option = option
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(CommentModal(self.option))
 
 # Viewにボタンを追加
-def create_reaction_view(user):
+def create_reaction_view():
     view = View(timeout=10080 * 60)  # 7日後にタイムアウト
     for option in reaction_options:
-        view.add_item(ReactionButton(label=option["label"], color=option["color"], score=option["score"], user=user, custom_id=option["custom_id"]))
+        view.add_item(ReactionButton(option))
     return view
 
 # on_message イベントでメッセージを転記
@@ -164,7 +168,7 @@ async def on_message(message):
             inline=False
         )
 
-        view = create_reaction_view(message.author)
+        view = create_reaction_view()
         sent_message = await destination_channel.send(embed=embed, view=view)
         logger.info(f"メッセージが転記されました: {sent_message.id}")
 
@@ -185,6 +189,19 @@ async def on_message(message):
 async def on_ready():
     logger.info(f'Logged in as {bot.user}')
     create_table()  # テーブル作成
+
+    destination_channel = bot.get_channel(DESTINATION_CHANNEL_ID)
+    async for message in destination_channel.history(limit=20):  
+        if message.author == bot.user and message.embeds:
+            try:
+                user_id = int(message.embeds[0].thumbnail.url.split("/")[4])
+                author = await bot.fetch_user(user_id)
+                if author:
+                    view = create_reaction_view()
+                    await message.edit(view=view)
+                    logger.info(f"再起動後にViewを再アタッチしました: {message.id}")
+            except Exception as e:
+                logger.error(f"再アタッチに失敗しました: {e}")
 
 # Botの起動
 bot.run(TOKEN)
