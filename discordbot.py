@@ -9,7 +9,7 @@ from discord.ui import Button, View, Modal, TextInput
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Discordのインテント設定
+# DiscordのIntents設定
 intents = discord.Intents.default()
 intents.message_content = True
 intents.reactions = True
@@ -19,10 +19,21 @@ intents.members = True
 TOKEN = os.getenv('DISCORD_TOKEN')
 DATABASE_URL = os.getenv('DATABASE_URL')
 
-# チャンネルIDの設定
-SOURCE_CHANNEL_IDS = [1299231408551755838, 1299231612944257036]  # メッセージが転記される元のチャンネル
-DESTINATION_CHANNEL_ID = 1299231533437292596  # 新しい転記先チャンネル
-THREAD_PARENT_CHANNEL_ID = 1299231693336743996  # 新しいスレッドの作成チャンネル
+# チャンネルIDを設定
+SOURCE_CHANNEL_IDS = [1299231408551755838, 1299231612944257036]  # ソース元のチャンネル
+DESTINATION_CHANNEL_ID = 1299231533437292596  # 転記先のチャンネル
+THREAD_PARENT_CHANNEL_ID = 1299231693336743996  # スレッドが作成されるチャンネル
+
+# コマンド実行を許可するユーザーID
+AUTHORIZED_USER_IDS = [822460191118721034, 302778094320615425]
+
+# ボタンの選択肢とスコア
+reaction_options = [
+    {"label": "入ってほしい！", "color": discord.Color.green(), "score": 2, "custom_id": "type1"},
+    {"label": "良い人！", "color": discord.Color.green(), "score": 1, "custom_id": "type2"},
+    {"label": "微妙", "color": discord.Color.red(), "score": -1, "custom_id": "type3"},
+    {"label": "入ってほしくない", "color": discord.Color.red(), "score": -2, "custom_id": "type4"}
+]
 
 # データベース接続
 def get_db_connection():
@@ -60,16 +71,8 @@ def load_thread_data(user_id):
             result = cursor.fetchone()
             return result[0] if result else None
 
-# ボット設定
+# Bot設定
 bot = commands.Bot(command_prefix='!', intents=intents)
-
-# ボタンの選択肢とスコア
-reaction_options = [
-    {"label": "入ってほしい！", "color": discord.Color.green(), "score": 2, "custom_id": "type1"},
-    {"label": "良い人！", "color": discord.Color.green(), "score": 1, "custom_id": "type2"},
-    {"label": "微妙", "color": discord.Color.red(), "score": -1, "custom_id": "type3"},
-    {"label": "入ってほしくない", "color": discord.Color.red(), "score": -2, "custom_id": "type4"}
-]
 
 # コメントを入力するためのモーダル
 class CommentModal(Modal):
@@ -85,7 +88,7 @@ class CommentModal(Modal):
 
     async def on_submit(self, interaction: discord.Interaction):
         try:
-            option = reaction_options[int(interaction.data["custom_id"])]
+            option = reaction_options[int(interaction.data["custom_id"][-1]) - 1]
             thread_id = load_thread_data(interaction.user.id)
 
             if not thread_id:
@@ -117,7 +120,7 @@ class CommentModal(Modal):
 
             # スレッドにメッセージを送信
             await thread.send(embed=embed)
-            await interaction.response.send_message(f"投票ありがとうなっつ！", ephemeral=True)
+            await interaction.response.send_message(f"投票ありがとう！", ephemeral=True)
 
         except discord.HTTPException as e:
             logger.error(f"HTTPエラーが発生しました: {str(e)}")
@@ -157,7 +160,10 @@ async def on_message(message):
         # メッセージの送信者のEmbedを作成して転記
         embed = discord.Embed(color=discord.Color.blue())
         embed.set_author(name=message.author.display_name)
+
+        # Embedの右上にアイコンを表示
         embed.set_thumbnail(url=message.author.display_avatar.url)
+
         embed.add_field(
             name="🌱つぼみ審査投票フォーム",
             value=(
@@ -170,7 +176,7 @@ async def on_message(message):
 
         view = create_reaction_view(message.author)
         sent_message = await destination_channel.send(embed=embed, view=view)
-        logger.info(f"メッセージが転記されました: {sent_message.id}")
+        logger.info(f"メッセージが転記されました: {sent_message.id}")  # ログ出力
 
         # スレッド作成
         thread_parent_channel = bot.get_channel(THREAD_PARENT_CHANNEL_ID)
@@ -179,7 +185,7 @@ async def on_message(message):
                 name=f"{message.author.display_name}のリアクション投票スレッド",
                 auto_archive_duration=10080  # 7日
             )
-            save_thread_data(message.author.id, thread.id)
+            save_thread_data(message.author.id, thread.id)  # スレッドデータをデータベースに保存
             logger.info(f"スレッドが作成されました: {thread.id} for {message.author.display_name}")
         except Exception as e:
             logger.error(f"スレッド作成に失敗しました: {e}")
@@ -188,7 +194,7 @@ async def on_message(message):
 @bot.event
 async def on_ready():
     logger.info(f'Logged in as {bot.user}')
-    create_table()
+    create_table()  # テーブル作成
 
     destination_channel = bot.get_channel(DESTINATION_CHANNEL_ID)
     async for message in destination_channel.history(limit=20):  
