@@ -74,6 +74,10 @@ def fetch_user_thread(user_id):
             with connection.cursor() as cursor:
                 cursor.execute("SELECT thread_id FROM user_threads WHERE user_id = %s", (user_id,))
                 result = cursor.fetchone()
+            if result:
+                logger.info(f"Fetched thread ID {result[0]} for user {user_id}")
+            else:
+                logger.warning(f"No thread found for user {user_id}")
             return result[0] if result else None
         except Exception as e:
             logger.error(f"Failed to fetch thread ID: {e}")
@@ -111,7 +115,8 @@ class CommentModal(Modal):
             await self.thread.send(embed=embed)
             await interaction.response.send_message("投票を完了しました！", ephemeral=True)
         else:
-            logger.error("Thread not found, unable to send message.")
+            logger.error("Thread not found, unable to send message to the thread.")
+            await interaction.response.send_message("スレッドが見つかりませんでした。投票を完了できませんでした。", ephemeral=True)
 
 # Buttons with reaction functionality
 class ReactionButton(Button):
