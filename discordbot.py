@@ -4,6 +4,7 @@ import logging
 import psycopg2
 from discord.ext import commands
 from discord.ui import Button, View, Modal, TextInput
+import time
 
 # Logging configuration
 logging.basicConfig(level=logging.INFO)
@@ -39,6 +40,7 @@ user_threads = {}
 bot = commands.Bot(command_prefix='!', intents=intents)
 
 def get_db_connection(retries=3, delay=2):
+    """Establish database connection with retry mechanism."""
     attempt = 0
     while attempt < retries:
         try:
@@ -52,16 +54,22 @@ def get_db_connection(retries=3, delay=2):
     raise RuntimeError("Could not establish a database connection")
 
 def save_user_thread(user_id, thread_id):
+    """Save thread ID for the user in the database, handling errors."""
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:
-            cursor.execute("INSERT INTO user_threads (user_id, thread_id) VALUES (%s, %s) ON CONFLICT (user_id) DO UPDATE SET thread_id = EXCLUDED.thread_id;", (user_id, thread_id))
+            cursor.execute(
+                "INSERT INTO user_threads (user_id, thread_id) VALUES (%s, %s) "
+                "ON CONFLICT (user_id) DO UPDATE SET thread_id = EXCLUDED.thread_id;",
+                (user_id, thread_id)
+            )
             connection.commit()
         logger.info(f"Saved thread ID {thread_id} for user {user_id}")
     except Exception as e:
         logger.error(f"Failed to save thread ID: {e}")
 
 def fetch_user_thread(user_id):
+    """Fetch the thread ID for a given user ID from the database."""
     connection = get_db_connection()
     with connection.cursor() as cursor:
         cursor.execute("SELECT thread_id FROM user_threads WHERE user_id = %s", (user_id,))
@@ -127,7 +135,7 @@ async def on_message(message):
         embed.set_thumbnail(url=message.author.display_avatar.url)
         embed.add_field(
             name="🌱つぼみ審査投票フォーム",
-            value="必ずこのサーバーでお話した上で投票をお願いします。複数回投票した場合は最新のものを反映します。",
+            value="必ずこのサーバーでお話した上で投票をお願いします。\n複数回投票した場合は最新のものを反映します。",
             inline=False
         )
         sent_message = await destination_channel.send(embed=embed, view=create_reaction_view(message.author))
