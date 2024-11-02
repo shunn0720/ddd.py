@@ -1,6 +1,7 @@
 import discord
 import os
 import logging
+import psycopg2
 from discord.ext import commands
 from discord.ui import Button, View, Modal, TextInput
 
@@ -13,13 +14,14 @@ intents.message_content = True
 intents.reactions = True
 intents.members = True
 
-# 環境変数からトークンを取得
+# 環境変数からトークンとデータベースURLを取得
 TOKEN = os.getenv('DISCORD_TOKEN')
+DATABASE_URL = os.getenv('DATABASE_URL')
 
 # チャンネルIDを設定
-SOURCE_CHANNEL_IDS = [1299231408551755838, 1299231612944257036]  # ソース元チャンネル
-DESTINATION_CHANNEL_ID = 1299231533437292596  # 転記先チャンネル
-THREAD_PARENT_CHANNEL_ID = 1299231693336743996  # スレッドが作成されるチャンネル
+SOURCE_CHANNEL_IDS = [1299231408551755838, 1299231612944257036]
+DESTINATION_CHANNEL_ID = 1299231533437292596
+THREAD_PARENT_CHANNEL_ID = 1299231693336743996
 
 # ボタンの選択肢とスコア
 reaction_options = [
@@ -29,11 +31,38 @@ reaction_options = [
     {"label": "入ってほしくない", "color": discord.ButtonStyle.red, "score": -2, "custom_id": "type4"}
 ]
 
-# ユーザーのスレッドごとの投票を追跡する辞書
-user_vote_messages = {}
-
 # Bot設定
 bot = commands.Bot(command_prefix='!', intents=intents)
+
+# データベース接続
+def get_db_connection():
+    return psycopg2.connect(DATABASE_URL, sslmode='require')
+
+# スレッドIDを保存する関数
+def save_thread_to_db(user_id, thread_id):
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO user_threads (user_id, thread_id) VALUES (%s, %s) ON CONFLICT (user_id) DO UPDATE SET thread_id = EXCLUDED.thread_id",
+                    (user_id, thread_id)
+                )
+                conn.commit()
+                logger.info(f"スレッドID {thread_id} をユーザー {user_id} に対して保存しました。")
+    except Exception as e:
+        logger.error(f"スレッドIDの保存に失敗しました: {e}")
+
+# スレッドIDをデータベースから取得する関数
+def get_thread_from_db(user_id):
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT thread_id FROM user_threads WHERE user_id = %s", (user_id,))
+                result = cur.fetchone()
+                return result[0] if result else None
+    except Exception as e:
+        logger.error(f"スレッドIDの取得に失敗しました: {e}")
+        return None
 
 # コメントを入力するためのモーダル
 class CommentModal(Modal):
@@ -58,15 +87,7 @@ class CommentModal(Modal):
         embed.add_field(name="点数", value=f"{option['score']}点", inline=False)
         embed.add_field(name="コメント", value=self.comment.value if self.comment.value else "コメントなし", inline=False)
 
-        # 重複投票がある場合、古い投票を削除
-        if interaction.user.id in user_vote_messages and user_vote_messages[interaction.user.id] in self.thread.messages:
-            old_vote = user_vote_messages[interaction.user.id]
-            await old_vote.delete()
-
-        # 新しい投票メッセージをスレッドに送信
-        vote_message = await self.thread.send(embed=embed)
-        user_vote_messages[interaction.user.id] = vote_message
-
+        await self.thread.send(embed=embed)
         await interaction.response.send_message("投票を完了しました！", ephemeral=True)
 
 # ボタンを作成するクラス
@@ -90,54 +111,61 @@ def create_reaction_view(thread):
 # on_message イベントでメッセージを転記してスレッドを作成
 @bot.event
 async def on_message(message):
-    if message.author == bot.user or message.channel.id not in SOURCE_CHANNEL_IDS:
-        return
-
-    try:
-        # 転記先チャンネル
+    if message.channel.id in SOURCE_CHANNEL_IDS and not message.author.bot:
         destination_channel = bot.get_channel(DESTINATION_CHANNEL_ID)
-        if destination_channel is None:
-            logger.error("転記先チャンネルが見つかりません。")
-            return
 
-        # Embed作成：アイコンを大きく右に表示
+        # メッセージの送信者のEmbedを作成して転記
         embed = discord.Embed(color=discord.Color.blue())
         embed.set_author(name=message.author.display_name)
-        embed.set_thumbnail(url=message.author.display_avatar.url)
-
+        
+        # 右に大きくアイコンを表示
+        embed.set_image(url=message.author.display_avatar.url)
+        
         embed.add_field(
             name="🌱つぼみ審査投票フォーム",
-            value="必ずこのサーバーでお話した上で投票をお願いします。\n複数回投票した場合は、最新のものを反映します。\nこの方の入場について、NG等意見のある方はお問い合わせください。",
+            value=(
+                "必ずこのサーバーでお話した上で投票をお願いします。\n"
+                "複数回投票した場合は、最新のものを反映します。\n"
+                "この方の入場について、NG等意見のある方はお問い合わせください。"
+            ),
             inline=False
         )
 
-        # 転記とボタン表示
         sent_message = await destination_channel.send(embed=embed)
-        logger.info(f"メッセージが転記されました: {sent_message.id}")
+        logger.info(f"メッセージが転記されました: {sent_message.id}")  # ログ出力
 
         # スレッド作成
         thread_parent_channel = bot.get_channel(THREAD_PARENT_CHANNEL_ID)
         if thread_parent_channel:
-            thread = await thread_parent_channel.create_thread(name=f"{message.author.display_name}のリアクション投票スレッド", auto_archive_duration=10080)
-            view = create_reaction_view(thread)
-            await sent_message.edit(view=view)
-            logger.info(f"スレッドが作成されました: {thread.id} for {message.author.display_name}")
-
-    except Exception as e:
-        logger.error(f"スレッド作成またはメッセージ転記に失敗しました: {e}")
+            try:
+                thread = await thread_parent_channel.create_thread(
+                    name=f"{message.author.display_name}のリアクション投票スレッド",
+                    auto_archive_duration=10080
+                )
+                save_thread_to_db(message.author.id, thread.id)
+                view = create_reaction_view(thread)
+                await sent_message.edit(view=view)
+                logger.info(f"スレッドが作成されました: {thread.id} for {message.author.display_name}")
+            except Exception as e:
+                logger.error(f"スレッド作成に失敗しました: {e}")
 
 # Bot再起動後にViewを再アタッチする処理
 @bot.event
 async def on_ready():
     logger.info(f"Logged in as {bot.user.name}#{bot.user.discriminator}")
+    
     destination_channel = bot.get_channel(DESTINATION_CHANNEL_ID)
-
     if destination_channel:
         async for message in destination_channel.history(limit=50):
-            if message.author == bot.user and message.embeds and message.thread:
-                view = create_reaction_view(message.thread)
-                await message.edit(view=view)
-                logger.info(f"再起動後にViewを再アタッチしました: {message.id}")
+            if message.author == bot.user and message.embeds:
+                user_id = int(message.embeds[0].author.name.split("#")[0])
+                thread_id = get_thread_from_db(user_id)
+                if thread_id:
+                    thread = await bot.fetch_channel(thread_id)
+                    if thread:
+                        view = create_reaction_view(thread)
+                        await message.edit(view=view)
+                        logger.info(f"再起動後にViewを再アタッチしました: {message.id}")
 
 # Botの起動
 bot.run(TOKEN)
