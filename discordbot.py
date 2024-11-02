@@ -27,10 +27,10 @@ THREAD_PARENT_CHANNEL_ID = 1299231693336743996
 
 # ボタンの選択肢とスコア
 reaction_options = [
-    {"label": "入ってほしい！", "color": discord.Color.green(), "score": 2, "custom_id": "type1"},
-    {"label": "良い人！", "color": discord.Color.green(), "score": 1, "custom_id": "type2"},
-    {"label": "微妙", "color": discord.Color.red(), "score": -1, "custom_id": "type3"},
-    {"label": "入ってほしくない", "color": discord.Color.red(), "score": -2, "custom_id": "type4"}
+    {"label": "入ってほしい！", "style": discord.ButtonStyle.success, "score": 2, "custom_id": "type1"},
+    {"label": "良い人！", "style": discord.ButtonStyle.success, "score": 1, "custom_id": "type2"},
+    {"label": "微妙", "style": discord.ButtonStyle.danger, "score": -1, "custom_id": "type3"},
+    {"label": "入ってほしくない", "style": discord.ButtonStyle.danger, "score": -2, "custom_id": "type4"}
 ]
 
 # ボタンを押したユーザーのスレッドを追跡する辞書
@@ -77,7 +77,7 @@ class CommentModal(Modal):
 
     async def on_submit(self, interaction: discord.Interaction):
         option = reaction_options[self.type]
-        embed = discord.Embed(color=option['color'])
+        embed = discord.Embed(color=option['style'].value)
         embed.set_author(name=interaction.user.display_name, icon_url=interaction.user.display_avatar.url)
         embed.add_field(name="リアクション結果", value=f"{interaction.user.display_name} が '{option['label']}' を押しました。", inline=False)
         embed.add_field(name="点数", value=f"{option['score']}点", inline=False)
@@ -92,9 +92,9 @@ class CommentModal(Modal):
 
 # ボタンを作成するクラス
 class ReactionButton(Button):
-    def __init__(self, label, color, score, custom_id, type, thread):
-        super().__init__(label=label, style=discord.ButtonStyle.primary, custom_id=custom_id)
-        self.color = color
+    def __init__(self, label, style, score, custom_id, type, thread):
+        super().__init__(label=label, style=style, custom_id=custom_id)
+        self.style = style
         self.score = score
         self.thread = thread
         self.type = type
@@ -107,7 +107,7 @@ class ReactionButton(Button):
 def create_reaction_view(thread):
     view = View(timeout=None)  # timeout=Noneでボタンが消えないように設定
     for i, option in enumerate(reaction_options):
-        view.add_item(ReactionButton(label=option["label"], color=option["color"], score=option["score"], custom_id=option["custom_id"], type=i, thread=thread))
+        view.add_item(ReactionButton(label=option["label"], style=option["style"], score=option["score"], custom_id=option["custom_id"], type=i, thread=thread))
     return view
 
 # on_message イベントでメッセージを転記してスレッドを作成
