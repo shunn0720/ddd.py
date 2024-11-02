@@ -36,15 +36,19 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 
 # ReactionButton クラス
 class ReactionButton(Button):
-    def __init__(self, label, color, score, thread):
+    def __init__(self, label, color, score, user_id):
         super().__init__(label=label, style=discord.ButtonStyle.primary)
         self.label = label
         self.color = color
         self.score = score
-        self.thread = thread
+        self.user_id = user_id
 
     async def callback(self, interaction: discord.Interaction):
-        modal = CommentModal(self.label, self.color, self.score, self.thread)
+        thread = user_threads.get(self.user_id)
+        if thread is None:
+            await interaction.response.send_message("スレッドが見つかりませんでした。", ephemeral=True)
+            return
+        modal = CommentModal(self.label, self.color, self.score, thread)
         await interaction.response.send_modal(modal)
 
 # コメントモーダル
@@ -87,9 +91,8 @@ class CommentModal(Modal):
 # Viewにボタンを追加
 def create_reaction_view(user_id):
     view = View(timeout=7 * 24 * 60 * 60)  # 7日後にタイムアウト
-    thread = user_threads.get(user_id)
     for option in reaction_options:
-        view.add_item(ReactionButton(label=option["label"], color=option["color"], score=option["score"], thread=thread))
+        view.add_item(ReactionButton(label=option["label"], color=option["color"], score=option["score"], user_id=user_id))
     view.on_timeout = lambda: disable_view(view)
     return view
 
