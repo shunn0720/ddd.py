@@ -18,8 +18,8 @@ TOKEN = os.getenv('DISCORD_TOKEN')
 
 # チャンネルIDを設定
 SOURCE_CHANNEL_IDS = [1299231408551755838, 1299231612944257036]
-DESTINATION_CHANNEL_ID = 1299231533437292596  # ここに転記されたユーザー情報が表示
-THREAD_PARENT_CHANNEL_ID = 1299231693336743996  # ここにスレッドを作成
+DESTINATION_CHANNEL_ID = 1299231533437292596  # 転記先チャンネルID
+THREAD_PARENT_CHANNEL_ID = 1299231693336743996  # スレッドが作成されるチャンネルID
 
 # コマンド実行を許可するユーザーID
 AUTHORIZED_USER_IDS = [822460191118721034, 302778094320615425]
@@ -40,10 +40,8 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 
 # コメントを入力するためのモーダル
 class CommentModal(Modal):
-    def __init__(self, type, user, interaction):
+    def __init__(self, type):
         super().__init__(title="投票画面", custom_id=str(type))
-        self.user = user
-        self.interaction = interaction
         self.comment = TextInput(
             label="コメント",
             style=discord.TextStyle.paragraph,
@@ -55,13 +53,13 @@ class CommentModal(Modal):
     async def on_submit(self, interaction: discord.Interaction):
         try:
             option = reaction_options[int(interaction.data["custom_id"])]
-            thread = user_threads.get(self.user.id)
+            thread = user_threads.get(interaction.user.id)
 
             if thread is None:
                 await interaction.response.send_message("スレッドが見つかりませんでした。", ephemeral=True)
                 return
-
-            embed = discord.Embed(color=option['color'])
+            
+            embed = discord.Embed(color=option['color']) 
             embed.set_author(name=interaction.user.display_name, icon_url=interaction.user.display_avatar.url)
             embed.add_field(
                 name="リアクション結果",
@@ -81,7 +79,7 @@ class CommentModal(Modal):
 
             # スレッドにメッセージを送信
             await thread.send(embed=embed)
-            await interaction.response.send_message("投票ありがとう！", ephemeral=True)
+            await interaction.response.send_message(f"投票ありがとう！", ephemeral=True)
 
         except discord.HTTPException as e:
             logger.error(f"HTTPエラーが発生しました: {str(e)}")
@@ -99,21 +97,26 @@ class CommentModal(Modal):
 # ボタンを作成するクラス
 class ReactionButton(Button):
     def __init__(self, label, color, score, user, custom_id):
-        super().__init__(label=label, style=discord.ButtonStyle.primary, custom_id=custom_id)
+        super().__init__(label=label, style=discord.ButtonStyle.primary)
         self.label = label
         self.color = color
         self.score = score
         self.user = user
+        self.custom_id = custom_id
 
-    async def callback(self, interaction: discord.Interaction):
-        modal = CommentModal(type=int(self.custom_id[-1]), user=self.user, interaction=interaction)
-        await interaction.response.send_modal(modal)
-
-# Viewにボタンを追加
+# 7日間のタイムアウトを設定してViewにボタンを追加
 def create_reaction_view(user):
-    view = View(timeout=10080 * 60)  # 7日後にタイムアウト
+    view = View(timeout=10080 * 60)  # 7日間のタイムアウト（分単位）
     for option in reaction_options:
         view.add_item(ReactionButton(label=option["label"], color=option["color"], score=option["score"], user=user, custom_id=option["custom_id"]))
+
+    # タイムアウト後の処理：ボタンを無効化して更新
+    async def on_timeout():
+        for item in view.children:
+            item.disabled = True
+        await view.message.edit(view=view)  # タイムアウト後にボタンを消す
+
+    view.on_timeout = on_timeout  # タイムアウトイベント設定
     return view
 
 # on_message イベントでメッセージを転記
@@ -126,6 +129,7 @@ async def on_message(message):
         embed = discord.Embed(color=discord.Color.blue())
         embed.set_author(name=message.author.display_name)
         embed.set_thumbnail(url=message.author.display_avatar.url)
+
         embed.add_field(
             name="🌱つぼみ審査投票フォーム",
             value=(
@@ -138,7 +142,9 @@ async def on_message(message):
 
         view = create_reaction_view(message.author)
         sent_message = await destination_channel.send(embed=embed, view=view)
-        logger.info(f"メッセージが転記されました: {sent_message.id}")
+        view.message = sent_message  # viewにメッセージ参照を持たせる
+
+        logger.info(f"メッセージが転記されました: {sent_message.id}")  # ログ出力
 
         # スレッド作成
         thread_parent_channel = bot.get_channel(THREAD_PARENT_CHANNEL_ID)
