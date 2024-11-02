@@ -24,7 +24,7 @@ SOURCE_CHANNEL_IDS = [1299231408551755838, 1299231612944257036]
 DESTINATION_CHANNEL_ID = 1299231533437292596
 THREAD_PARENT_CHANNEL_ID = 1299231693336743996
 
-# Reaction options with colors and scores
+# Reaction options with styles and scores
 reaction_options = [
     {"label": "入ってほしい！", "style": discord.ButtonStyle.success, "score": 2, "custom_id": "type1"},
     {"label": "良い人！", "style": discord.ButtonStyle.success, "score": 1, "custom_id": "type2"},
