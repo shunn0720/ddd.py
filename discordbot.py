@@ -87,7 +87,7 @@ def fetch_user_thread(user_id):
 
 # Modal for comments
 class CommentModal(Modal):
-    def __init__(self, reaction_type, thread):
+    def __init__(self, reaction_type, user_id):
         super().__init__(title="投票画面", timeout=None)
         self.comment = TextInput(
             label="コメント",
@@ -97,7 +97,7 @@ class CommentModal(Modal):
         )
         self.add_item(self.comment)
         self.reaction_type = reaction_type
-        self.thread = thread
+        self.user_id = user_id
 
     async def on_submit(self, interaction: discord.Interaction):
         option = reaction_options[self.reaction_type]
@@ -107,37 +107,41 @@ class CommentModal(Modal):
         embed.add_field(name="点数", value=f"{option['score']}点", inline=False)
         embed.add_field(name="コメント", value=self.comment.value if self.comment.value else "コメントなし", inline=False)
 
-        # スレッドが存在するか確認
-        if self.thread and isinstance(self.thread, discord.Thread):
-            logger.info(f"Sending message to thread {self.thread.id} for user {interaction.user.id}")
-            # 過去のメッセージを削除してから新しいメッセージを送信
-            async for msg in self.thread.history(limit=100):
-                if msg.author == bot.user and msg.embeds and msg.embeds[0].author.name == interaction.user.display_name:
-                    await msg.delete()
-            await self.thread.send(embed=embed)
-            await interaction.response.send_message("投票を完了しました！", ephemeral=True)
+        # スレッドを取得
+        thread_id = fetch_user_thread(self.user_id)
+        if thread_id:
+            thread = bot.get_channel(thread_id)
+            if isinstance(thread, discord.Thread):
+                logger.info(f"Sending message to thread {thread.id} for user {interaction.user.id}")
+                async for msg in thread.history(limit=100):
+                    if msg.author == bot.user and msg.embeds and msg.embeds[0].author.name == interaction.user.display_name:
+                        await msg.delete()
+                await thread.send(embed=embed)
+                await interaction.response.send_message("投票を完了しました！", ephemeral=True)
+            else:
+                logger.error("Thread not found or invalid, unable to send message to the thread.")
+                await interaction.response.send_message("スレッドが見つかりませんでした。投票を完了できませんでした。", ephemeral=True)
         else:
-            # スレッドが見つからない場合はエラーメッセージを表示
-            logger.error("Thread not found, unable to send message to the thread.")
+            logger.error("Thread ID not found in database.")
             await interaction.response.send_message("スレッドが見つかりませんでした。投票を完了できませんでした。", ephemeral=True)
 
 # Buttons with reaction functionality
 class ReactionButton(Button):
-    def __init__(self, label, style, score, reaction_type, thread):
+    def __init__(self, label, style, score, reaction_type, user_id):
         super().__init__(label=label, style=style)
         self.score = score
         self.reaction_type = reaction_type
-        self.thread = thread
+        self.user_id = user_id
 
     async def callback(self, interaction: discord.Interaction):
-        logger.info(f"Button clicked by {interaction.user.id}, attempting to open modal with thread {self.thread.id if self.thread else 'None'}")
-        modal = CommentModal(self.reaction_type, self.thread)
+        logger.info(f"Button clicked by {interaction.user.id}, attempting to open modal for user {self.user_id}")
+        modal = CommentModal(self.reaction_type, self.user_id)
         await interaction.response.send_modal(modal)
 
-def create_reaction_view(thread):
+def create_reaction_view(user_id):
     view = View(timeout=None)
     for i, option in enumerate(reaction_options):
-        view.add_item(ReactionButton(label=option["label"], style=option["style"], score=option["score"], reaction_type=i, thread=thread))
+        view.add_item(ReactionButton(label=option["label"], style=option["style"], score=option["score"], reaction_type=i, user_id=user_id))
     return view
 
 # Message forwarding and thread creation
@@ -149,23 +153,21 @@ async def on_message(message):
             logger.error("Destination channel not found.")
             return
 
-        # Forward the message and create an embed
         embed = discord.Embed(color=discord.Color.blue())
         embed.set_author(name=message.author.display_name, icon_url=message.author.display_avatar.url)
-        embed.set_thumbnail(url=message.author.display_avatar.url)  # Use set_thumbnail to position icon in the top-right
+        embed.set_thumbnail(url=message.author.display_avatar.url)
         embed.add_field(
             name="🌱つぼみ審査投票フォーム",
             value="必ずこのサーバーでお話した上で投票をお願いします。\n複数回投票した場合は最新のものを反映します。\nこの方の入場について、NG等意見のある方はお問い合わせください。",
             inline=False
         )
 
-        sent_message = await destination_channel.send(embed=embed, view=create_reaction_view(message.author))
+        sent_message = await destination_channel.send(embed=embed, view=create_reaction_view(message.author.id))
         thread_parent_channel = bot.get_channel(THREAD_PARENT_CHANNEL_ID)
         if thread_parent_channel is None:
             logger.error("Thread parent channel not found.")
             return
 
-        # Create a thread and save its ID
         try:
             thread = await thread_parent_channel.create_thread(name=f"{message.author.display_name}の投票スレッド")
             save_user_thread(message.author.id, thread.id)
