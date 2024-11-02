@@ -107,15 +107,17 @@ class CommentModal(Modal):
         embed.add_field(name="点数", value=f"{option['score']}点", inline=False)
         embed.add_field(name="コメント", value=self.comment.value if self.comment.value else "コメントなし", inline=False)
 
-        # Ensure the message is sent to the thread and not DM
-        if self.thread:
+        # スレッドが存在するか確認
+        if self.thread and isinstance(self.thread, discord.Thread):
             logger.info(f"Sending message to thread {self.thread.id} for user {interaction.user.id}")
+            # 過去のメッセージを削除してから新しいメッセージを送信
             async for msg in self.thread.history(limit=100):
                 if msg.author == bot.user and msg.embeds and msg.embeds[0].author.name == interaction.user.display_name:
                     await msg.delete()
             await self.thread.send(embed=embed)
             await interaction.response.send_message("投票を完了しました！", ephemeral=True)
         else:
+            # スレッドが見つからない場合はエラーメッセージを表示
             logger.error("Thread not found, unable to send message to the thread.")
             await interaction.response.send_message("スレッドが見つかりませんでした。投票を完了できませんでした。", ephemeral=True)
 
