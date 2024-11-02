@@ -99,7 +99,7 @@ class CommentModal(Modal):
         embed.add_field(name="コメント", value=self.comment.value if self.comment.value else "コメントなし", inline=False)
 
         try:
-            previous_votes = await self.thread.history(limit=100).flatten()
+            previous_votes = [msg async for msg in self.thread.history(limit=100)]
             for msg in previous_votes:
                 if msg.author == bot.user and msg.embeds and msg.embeds[0].author.name == interaction.user.display_name:
                     await msg.delete()
