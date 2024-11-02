@@ -18,11 +18,8 @@ TOKEN = os.getenv('DISCORD_TOKEN')
 
 # チャンネルIDを設定
 SOURCE_CHANNEL_IDS = [1299231408551755838, 1299231612944257036]
-DESTINATION_CHANNEL_ID = 1299231533437292596  # 転記先チャンネルID
-THREAD_PARENT_CHANNEL_ID = 1299231693336743996  # スレッドが作成されるチャンネルID
-
-# コマンド実行を許可するユーザーID
-AUTHORIZED_USER_IDS = [822460191118721034, 302778094320615425]
+DESTINATION_CHANNEL_ID = 1299231533437292596
+THREAD_PARENT_CHANNEL_ID = 1299231693336743996
 
 # ボタンの選択肢とスコア
 reaction_options = [
@@ -32,16 +29,32 @@ reaction_options = [
     {"label": "入ってほしくない", "color": discord.Color.red(), "score": -2, "custom_id": "type4"}
 ]
 
-# ボタンを押したユーザーのスレッドを追跡する辞書
 user_threads = {}
 
 # Bot設定
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-# コメントを入力するためのモーダル
+# ReactionButton クラス
+class ReactionButton(Button):
+    def __init__(self, label, color, score, thread):
+        super().__init__(label=label, style=discord.ButtonStyle.primary)
+        self.label = label
+        self.color = color
+        self.score = score
+        self.thread = thread
+
+    async def callback(self, interaction: discord.Interaction):
+        modal = CommentModal(self.label, self.color, self.score, self.thread)
+        await interaction.response.send_modal(modal)
+
+# コメントモーダル
 class CommentModal(Modal):
-    def __init__(self, type):
-        super().__init__(title="投票画面", custom_id=str(type))
+    def __init__(self, label, color, score, thread):
+        super().__init__(title="投票画面")
+        self.label = label
+        self.color = color
+        self.score = score
+        self.thread = thread
         self.comment = TextInput(
             label="コメント",
             style=discord.TextStyle.paragraph,
@@ -51,73 +64,41 @@ class CommentModal(Modal):
         self.add_item(self.comment)
 
     async def on_submit(self, interaction: discord.Interaction):
-        try:
-            option = reaction_options[int(interaction.data["custom_id"])]
-            thread = user_threads.get(interaction.user.id)
+        embed = discord.Embed(color=self.color)
+        embed.set_author(name=interaction.user.display_name, icon_url=interaction.user.display_avatar.url)
+        embed.add_field(
+            name="リアクション結果",
+            value=f"{interaction.user.display_name} が '{self.label}' を押しました。",
+            inline=False
+        )
+        embed.add_field(
+            name="点数",
+            value=f"{self.score}点",
+            inline=False
+        )
+        embed.add_field(
+            name="コメント",
+            value=self.comment.value if self.comment.value else "コメントなし",
+            inline=False
+        )
+        await self.thread.send(embed=embed)
+        await interaction.response.send_message("投票を記録しました。", ephemeral=True)
 
-            if thread is None:
-                await interaction.response.send_message("スレッドが見つかりませんでした。", ephemeral=True)
-                return
-            
-            embed = discord.Embed(color=option['color']) 
-            embed.set_author(name=interaction.user.display_name, icon_url=interaction.user.display_avatar.url)
-            embed.add_field(
-                name="リアクション結果",
-                value=f"{interaction.user.display_name} が '{option['label']}' を押しました。",
-                inline=False
-            )
-            embed.add_field(
-                name="点数",
-                value=f"{option['score']}点",
-                inline=False
-            )
-            embed.add_field(
-                name="コメント",
-                value=self.comment.value if self.comment.value else "コメントなし",
-                inline=False
-            )
-
-            # スレッドにメッセージを送信
-            await thread.send(embed=embed)
-            await interaction.response.send_message(f"投票ありがとう！", ephemeral=True)
-
-        except discord.HTTPException as e:
-            logger.error(f"HTTPエラーが発生しました: {str(e)}")
-            await interaction.response.send_message(f"HTTPエラーが発生しました: {str(e)}", ephemeral=True)
-        except discord.Forbidden:
-            logger.error("操作の権限がありません。")
-            await interaction.response.send_message("この操作を行う権限がありません。", ephemeral=True)
-        except discord.NotFound:
-            logger.error("指定されたリソースが見つかりませんでした。")
-            await interaction.response.send_message("指定されたリソースが見つかりませんでした。", ephemeral=True)
-        except Exception as e:
-            logger.error(f"予期しないエラーが発生しました: {str(e)}")
-            await interaction.response.send_message(f"エラーが発生しました: {str(e)}", ephemeral=True)
-
-# ボタンを作成するクラス
-class ReactionButton(Button):
-    def __init__(self, label, color, score, user, custom_id):
-        super().__init__(label=label, style=discord.ButtonStyle.primary)
-        self.label = label
-        self.color = color
-        self.score = score
-        self.user = user
-        self.custom_id = custom_id
-
-# 7日間のタイムアウトを設定してViewにボタンを追加
-def create_reaction_view(user):
-    view = View(timeout=10080 * 60)  # 7日間のタイムアウト（分単位）
+# Viewにボタンを追加
+def create_reaction_view(user_id):
+    view = View(timeout=7 * 24 * 60 * 60)  # 7日後にタイムアウト
+    thread = user_threads.get(user_id)
     for option in reaction_options:
-        view.add_item(ReactionButton(label=option["label"], color=option["color"], score=option["score"], user=user, custom_id=option["custom_id"]))
-
-    # タイムアウト後の処理：ボタンを無効化して更新
-    async def on_timeout():
-        for item in view.children:
-            item.disabled = True
-        await view.message.edit(view=view)  # タイムアウト後にボタンを消す
-
-    view.on_timeout = on_timeout  # タイムアウトイベント設定
+        view.add_item(ReactionButton(label=option["label"], color=option["color"], score=option["score"], thread=thread))
+    view.on_timeout = lambda: disable_view(view)
     return view
+
+# ボタンを無効化する関数
+async def disable_view(view):
+    for item in view.children:
+        item.disabled = True
+    if view.message:
+        await view.message.edit(view=view)
 
 # on_message イベントでメッセージを転記
 @bot.event
@@ -125,11 +106,9 @@ async def on_message(message):
     if message.channel.id in SOURCE_CHANNEL_IDS and not message.author.bot:
         destination_channel = bot.get_channel(DESTINATION_CHANNEL_ID)
 
-        # メッセージの送信者のEmbedを作成して転記
         embed = discord.Embed(color=discord.Color.blue())
         embed.set_author(name=message.author.display_name)
         embed.set_thumbnail(url=message.author.display_avatar.url)
-
         embed.add_field(
             name="🌱つぼみ審査投票フォーム",
             value=(
@@ -140,23 +119,36 @@ async def on_message(message):
             inline=False
         )
 
-        view = create_reaction_view(message.author)
+        view = create_reaction_view(message.author.id)
         sent_message = await destination_channel.send(embed=embed, view=view)
-        view.message = sent_message  # viewにメッセージ参照を持たせる
+        view.message = sent_message
 
-        logger.info(f"メッセージが転記されました: {sent_message.id}")  # ログ出力
+        logger.info(f"メッセージが転記されました: {sent_message.id}")
 
         # スレッド作成
         thread_parent_channel = bot.get_channel(THREAD_PARENT_CHANNEL_ID)
-        try:
-            thread = await thread_parent_channel.create_thread(
-                name=f"{message.author.display_name}のリアクション投票スレッド",
-                auto_archive_duration=10080  # 7日
-            )
-            user_threads[message.author.id] = thread
-            logger.info(f"スレッドが作成されました: {thread.id} for {message.author.display_name}")
-        except Exception as e:
-            logger.error(f"スレッド作成に失敗しました: {e}")
+        thread = await thread_parent_channel.create_thread(
+            name=f"{message.author.display_name}のリアクション投票スレッド",
+            auto_archive_duration=10080  # 7日
+        )
+        user_threads[message.author.id] = thread
+        logger.info(f"スレッドが作成されました: {thread.id} for {message.author.display_name}")
 
-# Botの起動
+# 再起動後にViewを再アタッチ
+@bot.event
+async def on_ready():
+    logger.info(f'Logged in as {bot.user}')
+    destination_channel = bot.get_channel(DESTINATION_CHANNEL_ID)
+    async for message in destination_channel.history(limit=50):
+        if message.author == bot.user and message.embeds:
+            try:
+                if message.embeds[0].thumbnail and message.embeds[0].thumbnail.url:
+                    user_id = int(message.embeds[0].thumbnail.url.split("/")[-2])
+                    view = create_reaction_view(user_id)
+                    view.message = message  # タイムアウト時の編集用
+                    await message.edit(view=view)
+                    logger.info(f"再起動後にViewを再アタッチしました: {message.id}")
+            except Exception as e:
+                logger.error(f"再アタッチに失敗しました: {e}")
+
 bot.run(TOKEN)
