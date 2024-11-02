@@ -103,13 +103,15 @@ class CommentModal(Modal):
         embed.add_field(name="点数", value=f"{option['score']}点", inline=False)
         embed.add_field(name="コメント", value=self.comment.value if self.comment.value else "コメントなし", inline=False)
 
-        # Ensure we send to the thread and not DM
-        async for msg in self.thread.history(limit=100):
-            if msg.author == bot.user and msg.embeds and msg.embeds[0].author.name == interaction.user.display_name:
-                await msg.delete()
-
-        await self.thread.send(embed=embed)
-        await interaction.response.send_message("投票を完了しました！", ephemeral=True)
+        # Ensure the message is sent to the thread and not DM
+        if self.thread:
+            async for msg in self.thread.history(limit=100):
+                if msg.author == bot.user and msg.embeds and msg.embeds[0].author.name == interaction.user.display_name:
+                    await msg.delete()
+            await self.thread.send(embed=embed)
+            await interaction.response.send_message("投票を完了しました！", ephemeral=True)
+        else:
+            logger.error("Thread not found, unable to send message.")
 
 # Buttons with reaction functionality
 class ReactionButton(Button):
