@@ -119,17 +119,17 @@ async def on_message(message):
         return
 
     try:
-        # メッセージを転記するチャンネル
-        destination_channel = bot.get_channel(DESTINATION_CHANNEL_ID)
-        if destination_channel is None:
-            logger.error("転記先チャンネルが見つかりません。")
+        # THREAD_PARENT_CHANNEL_IDでスレッドを作成
+        parent_channel = bot.get_channel(THREAD_PARENT_CHANNEL_ID)
+        if parent_channel is None:
+            logger.error("スレッド作成先チャンネルが見つかりません。")
             return
 
         # メッセージを転記
-        posted_message = await destination_channel.send(content=message.content)
+        posted_message = await parent_channel.send(content=message.content)
         logger.info(f"メッセージが転記されました: {posted_message.id}")
 
-        # スレッドを作成
+        # 転記メッセージに基づきスレッドを作成
         thread = await posted_message.create_thread(name=f"{message.author.display_name}のスレッド")
         logger.info(f"スレッドが作成されました: {thread.id} for {message.author.display_name}")
 
