@@ -39,7 +39,7 @@ user_threads = {}
 bot = commands.Bot(command_prefix='!', intents=intents)
 
 def get_db_connection():
-    """Connect to the database with retries."""
+    """Connect to the database."""
     try:
         connection = psycopg2.connect(DATABASE_URL, sslmode='require')
         logger.info("Database connected successfully")
@@ -103,7 +103,7 @@ class CommentModal(Modal):
         embed.add_field(name="点数", value=f"{option['score']}点", inline=False)
         embed.add_field(name="コメント", value=self.comment.value if self.comment.value else "コメントなし", inline=False)
 
-        # Delete previous votes from this user
+        # Ensure we send to the thread and not DM
         async for msg in self.thread.history(limit=100):
             if msg.author == bot.user and msg.embeds and msg.embeds[0].author.name == interaction.user.display_name:
                 await msg.delete()
