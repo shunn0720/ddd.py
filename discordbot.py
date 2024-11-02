@@ -135,7 +135,7 @@ async def on_message(message):
         embed.set_thumbnail(url=message.author.display_avatar.url)
         embed.add_field(
             name="🌱つぼみ審査投票フォーム",
-            value="必ずこのサーバーでお話した上で投票をお願いします。\n複数回投票した場合は最新のものを反映します。",
+            value="必ずこのサーバーでお話した上で投票をお願いします。\n複数回投票した場合は最新のものを反映します。\nこの方の入場について、NG等意見のある方はお問い合わせください。",
             inline=False
         )
         sent_message = await destination_channel.send(embed=embed, view=create_reaction_view(message.author))
