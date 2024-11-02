@@ -62,7 +62,7 @@ def get_db_connection(retries=3, delay=2):
 
 # コメントを入力するためのモーダル
 class CommentModal(Modal):
-    def __init__(self, type, thread):
+    def __init__(self, reaction_type, thread):
         super().__init__(title="投票画面", timeout=None)
 
         self.comment = TextInput(
@@ -72,11 +72,11 @@ class CommentModal(Modal):
             required=False
         )
         self.add_item(self.comment)
-        self.type = type
+        self.reaction_type = reaction_type  # 修正: 'type' -> 'reaction_type'
         self.thread = thread
 
     async def on_submit(self, interaction: discord.Interaction):
-        option = reaction_options[self.type]
+        option = reaction_options[self.reaction_type]
         embed = discord.Embed(color=option['style'].value)
         embed.set_author(name=interaction.user.display_name, icon_url=interaction.user.display_avatar.url)
         embed.add_field(name="リアクション結果", value=f"{interaction.user.display_name} が '{option['label']}' を押しました。", inline=False)
@@ -92,22 +92,22 @@ class CommentModal(Modal):
 
 # ボタンを作成するクラス
 class ReactionButton(Button):
-    def __init__(self, label, style, score, custom_id, type, thread):
+    def __init__(self, label, style, score, custom_id, reaction_type, thread):
         super().__init__(label=label, style=style, custom_id=custom_id)
         self.style = style
         self.score = score
         self.thread = thread
-        self.type = type
+        self.reaction_type = reaction_type  # 修正: 'type' -> 'reaction_type'
 
     async def callback(self, interaction: discord.Interaction):
-        modal = CommentModal(self.type, self.thread)
+        modal = CommentModal(self.reaction_type, self.thread)
         await interaction.response.send_modal(modal)
 
 # Viewにボタンを追加
 def create_reaction_view(thread):
     view = View(timeout=None)  # timeout=Noneでボタンが消えないように設定
     for i, option in enumerate(reaction_options):
-        view.add_item(ReactionButton(label=option["label"], style=option["style"], score=option["score"], custom_id=option["custom_id"], type=i, thread=thread))
+        view.add_item(ReactionButton(label=option["label"], style=option["style"], score=option["score"], custom_id=option["custom_id"], reaction_type=i, thread=thread))
     return view
 
 # on_message イベントでメッセージを転記してスレッドを作成
