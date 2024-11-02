@@ -109,6 +109,7 @@ class CommentModal(Modal):
 
         # Ensure the message is sent to the thread and not DM
         if self.thread:
+            logger.info(f"Sending message to thread {self.thread.id} for user {interaction.user.id}")
             async for msg in self.thread.history(limit=100):
                 if msg.author == bot.user and msg.embeds and msg.embeds[0].author.name == interaction.user.display_name:
                     await msg.delete()
@@ -127,6 +128,7 @@ class ReactionButton(Button):
         self.thread = thread
 
     async def callback(self, interaction: discord.Interaction):
+        logger.info(f"Button clicked by {interaction.user.id}, attempting to open modal with thread {self.thread.id if self.thread else 'None'}")
         modal = CommentModal(self.reaction_type, self.thread)
         await interaction.response.send_modal(modal)
 
@@ -166,7 +168,7 @@ async def on_message(message):
             thread = await thread_parent_channel.create_thread(name=f"{message.author.display_name}の投票スレッド")
             save_user_thread(message.author.id, thread.id)
             user_threads[message.author.id] = thread
-            logger.info(f"Message forwarded and thread created for {message.author.display_name}")
+            logger.info(f"Message forwarded and thread created for {message.author.display_name} with thread ID {thread.id}")
         except Exception as e:
             logger.error(f"Failed to create thread: {e}")
 
