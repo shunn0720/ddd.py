@@ -130,7 +130,7 @@ class CommentModal(Modal):
                     raise ValueError("Fetched channel is not a thread.")
             except discord.errors.NotFound:
                 logger.error(f"Thread {thread_id} not found.")
-                await interaction.response.send_message("スレッドが見つかりませんでした。", ephemeral=True)
+                await interaction.response.send_message("スレッドが見つかりませんでした。新しいスレッドを作成してください。", ephemeral=True)
             except Exception as e:
                 logger.error(f"Failed to send message to thread {thread_id}: {e}")
                 await interaction.response.send_message("スレッドへの送信に失敗しました。", ephemeral=True)
