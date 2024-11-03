@@ -33,6 +33,9 @@ reaction_options = [
     {"label": "入ってほしくない", "style": discord.ButtonStyle.danger, "score": -2, "custom_id": "type4"}
 ]
 
+# Tracks threads per user
+user_threads = {}
+
 # Bot setup
 bot = commands.Bot(command_prefix='!', intents=intents)
 
@@ -115,7 +118,9 @@ class CommentModal(Modal):
                 if isinstance(thread, discord.Thread):
                     if thread.archived:
                         await thread.edit(archived=False)
-                    
+                    async for msg in thread.history(limit=100):
+                        if msg.author == bot.user and msg.embeds and msg.embeds[0].author.name == interaction.user.display_name:
+                            await msg.delete()
                     await thread.send(embed=embed)
                     await interaction.response.send_message("投票を完了しました！", ephemeral=True)
                 else:
@@ -130,7 +135,7 @@ class CommentModal(Modal):
             logger.error("Thread ID not found in database.")
             await interaction.response.send_message("スレッドが見つかりませんでした。", ephemeral=True)
 
-# Buttons with reaction functionality
+# Reaction buttons
 class ReactionButton(Button):
     def __init__(self, label, style, score, reaction_type, user_id):
         super().__init__(label=label, style=style)
@@ -141,7 +146,6 @@ class ReactionButton(Button):
     async def callback(self, interaction: discord.Interaction):
         logger.info(f"Button clicked by {interaction.user.id}, attempting to open modal for user {self.user_id}")
         modal = CommentModal(self.reaction_type, self.user_id)
-
         try:
             await interaction.response.send_modal(modal)
         except discord.errors.InteractionResponded:
