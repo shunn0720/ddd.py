@@ -141,16 +141,12 @@ class ReactionButton(Button):
 
     async def callback(self, interaction: discord.Interaction):
         logger.info(f"Button clicked by {interaction.user.id}, attempting to open modal for user {self.user_id}")
-        
+
         # モーダルを準備
         modal = CommentModal(self.reaction_type, self.user_id)
 
-        # モーダルを表示
-        try:
-            await interaction.response.send_modal(modal)  # deferを削除し直接send_modalを使用
-        except Exception as e:
-            logger.error(f"Failed to send modal: {e}")
-            await interaction.followup.send("モーダルの表示に失敗しました。もう一度お試しください。", ephemeral=True)
+        # インタラクションの応答を送信
+        await interaction.response.send_modal(modal)
 
 def create_reaction_view(user_id):
     view = View(timeout=None)
