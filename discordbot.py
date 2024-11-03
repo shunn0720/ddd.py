@@ -120,16 +120,16 @@ class CommentModal(Modal):
                         if msg.author == bot.user and msg.embeds and msg.embeds[0].author.name == interaction.user.display_name:
                             await msg.delete()
                     await thread.send(embed=embed)
-                    await interaction.followup.send("投票を完了しました！", ephemeral=True)
+                    await interaction.response.send_message("投票を完了しました！", ephemeral=True)
                 except Exception as e:
                     logger.error(f"Failed to send message to thread {thread.id}: {e}")
-                    await interaction.followup.send("スレッドへの送信に失敗しました。", ephemeral=True)
+                    await interaction.response.send_message("スレッドへの送信に失敗しました。", ephemeral=True)
             else:
                 logger.error("Thread not found or invalid.")
-                await interaction.followup.send("スレッドが見つかりませんでした。", ephemeral=True)
+                await interaction.response.send_message("スレッドが見つかりませんでした。", ephemeral=True)
         else:
             logger.error("Thread ID not found in database.")
-            await interaction.followup.send("スレッドが見つかりませんでした。", ephemeral=True)
+            await interaction.response.send_message("スレッドが見つかりませんでした。", ephemeral=True)
 
 # Buttons with reaction functionality
 class ReactionButton(Button):
@@ -142,15 +142,12 @@ class ReactionButton(Button):
     async def callback(self, interaction: discord.Interaction):
         logger.info(f"Button clicked by {interaction.user.id}, attempting to open modal for user {self.user_id}")
         
-        # 即時応答を使用し、インタラクション失敗を防ぐ
-        await interaction.response.defer(ephemeral=True)
-
         # モーダルを準備
         modal = CommentModal(self.reaction_type, self.user_id)
 
         # モーダルを表示
         try:
-            await interaction.response.send_modal(modal)  # 修正: interaction.responseでモーダルを送信
+            await interaction.response.send_modal(modal)  # deferを削除し直接send_modalを使用
         except Exception as e:
             logger.error(f"Failed to send modal: {e}")
             await interaction.followup.send("モーダルの表示に失敗しました。もう一度お試しください。", ephemeral=True)
