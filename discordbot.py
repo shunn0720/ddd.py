@@ -107,23 +107,29 @@ class CommentModal(Modal):
         embed.add_field(name="点数", value=f"{option['score']}点", inline=False)
         embed.add_field(name="コメント", value=self.comment.value if self.comment.value else "コメントなし", inline=False)
 
-        # スレッドを取得
+        # スレッドの有効性とアーカイブ状態を確認
         thread_id = fetch_user_thread(self.user_id)
         if thread_id:
             thread = bot.get_channel(thread_id)
             if isinstance(thread, discord.Thread):
-                logger.info(f"Sending message to thread {thread.id} for user {interaction.user.id}")
-                async for msg in thread.history(limit=100):
-                    if msg.author == bot.user and msg.embeds and msg.embeds[0].author.name == interaction.user.display_name:
-                        await msg.delete()
-                await thread.send(embed=embed)
-                await interaction.response.send_message("投票を完了しました！", ephemeral=True)
+                if thread.is_archived:
+                    await thread.edit(archived=False)  # スレッドがアーカイブされている場合は再開
+
+                try:
+                    async for msg in thread.history(limit=100):
+                        if msg.author == bot.user and msg.embeds and msg.embeds[0].author.name == interaction.user.display_name:
+                            await msg.delete()
+                    await thread.send(embed=embed)
+                    await interaction.followup.send("投票を完了しました！", ephemeral=True)
+                except Exception as e:
+                    logger.error(f"Failed to send message to thread {thread.id}: {e}")
+                    await interaction.followup.send("スレッドへの送信に失敗しました。", ephemeral=True)
             else:
-                logger.error("Thread not found or invalid, unable to send message to the thread.")
-                await interaction.response.send_message("スレッドが見つかりませんでした。投票を完了できませんでした。", ephemeral=True)
+                logger.error("Thread not found or invalid.")
+                await interaction.followup.send("スレッドが見つかりませんでした。", ephemeral=True)
         else:
             logger.error("Thread ID not found in database.")
-            await interaction.response.send_message("スレッドが見つかりませんでした。投票を完了できませんでした。", ephemeral=True)
+            await interaction.followup.send("スレッドが見つかりませんでした。", ephemeral=True)
 
 # Buttons with reaction functionality
 class ReactionButton(Button):
@@ -135,8 +141,19 @@ class ReactionButton(Button):
 
     async def callback(self, interaction: discord.Interaction):
         logger.info(f"Button clicked by {interaction.user.id}, attempting to open modal for user {self.user_id}")
+        
+        # すぐに応答を返し、インタラクション失敗を防ぐ
+        await interaction.response.defer(ephemeral=True)
+
+        # モーダルを準備
         modal = CommentModal(self.reaction_type, self.user_id)
-        await interaction.response.send_modal(modal)
+
+        # モーダルを表示
+        try:
+            await interaction.followup.send_modal(modal)
+        except Exception as e:
+            logger.error(f"Failed to send modal: {e}")
+            await interaction.followup.send("モーダルの表示に失敗しました。もう一度お試しください。", ephemeral=True)
 
 def create_reaction_view(user_id):
     view = View(timeout=None)
