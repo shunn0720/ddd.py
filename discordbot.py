@@ -5,6 +5,7 @@ import psycopg2
 from discord.ext import commands
 from discord.ui import Button, View, Modal, TextInput
 import time
+import asyncio
 
 # Logging configuration
 logging.basicConfig(level=logging.INFO)
@@ -158,6 +159,10 @@ async def on_message(message):
                 inline=False
             )
             sent_message = await destination_channel.send(embed=embed, view=create_reaction_view(message.author.id))
+
+            # Wait briefly to ensure message is processed
+            await asyncio.sleep(1)  # 1 second delay
+
             thread_parent_channel = bot.get_channel(THREAD_PARENT_CHANNEL_ID)
             try:
                 thread = await thread_parent_channel.create_thread(name=f"{message.author.display_name}の投票スレッド", message=sent_message)
