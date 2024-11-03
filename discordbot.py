@@ -33,9 +33,6 @@ reaction_options = [
     {"label": "入ってほしくない", "style": discord.ButtonStyle.danger, "score": -2, "custom_id": "type4"}
 ]
 
-# Tracks threads per user
-user_threads = {}
-
 # Bot setup
 bot = commands.Bot(command_prefix='!', intents=intents)
 
@@ -49,7 +46,7 @@ def get_db_connection(retries=3):
         except Exception as e:
             logger.error(f"Database connection failed: {e}. Retries left: {retries - 1}")
             retries -= 1
-            time.sleep(2)  # Wait before retrying
+            time.sleep(2)
     return None
 
 def save_user_thread(user_id, thread_id):
@@ -118,13 +115,10 @@ class CommentModal(Modal):
                 if isinstance(thread, discord.Thread):
                     if thread.archived:
                         await thread.edit(archived=False)
-                    async for msg in thread.history(limit=100):
-                        if msg.author == bot.user and msg.embeds and msg.embeds[0].author.name == interaction.user.display_name:
-                            await msg.delete()
                     await thread.send(embed=embed)
                     await interaction.response.send_message("投票を完了しました！", ephemeral=True)
                 else:
-                    raise ValueError("Fetched channel is not a thread.")
+                    logger.error("Fetched channel is not a thread.")
             except discord.errors.NotFound:
                 logger.error(f"Thread {thread_id} not found.")
                 await interaction.response.send_message("スレッドが見つかりませんでした。", ephemeral=True)
@@ -144,13 +138,8 @@ class ReactionButton(Button):
         self.user_id = user_id
 
     async def callback(self, interaction: discord.Interaction):
-        logger.info(f"Button clicked by {interaction.user.id}, attempting to open modal for user {self.user_id}")
         modal = CommentModal(self.reaction_type, self.user_id)
-        try:
-            await interaction.response.send_modal(modal)
-        except discord.errors.InteractionResponded:
-            logger.warning("Interaction has already been responded to.")
-            await interaction.followup.send("このインタラクションには既に応答されています。", ephemeral=True)
+        await interaction.response.send_modal(modal)
 
 def create_reaction_view(user_id):
     view = View(timeout=None)
@@ -176,14 +165,16 @@ async def on_message(message):
             inline=False
         )
 
-        sent_message = await destination_channel.send(embed=embed, view=create_reaction_view(message.author.id))
-        thread_parent_channel = bot.get_channel(THREAD_PARENT_CHANNEL_ID)
-
         try:
-            thread = await thread_parent_channel.create_thread(name=f"{message.author.display_name}の投票スレッド", message=sent_message)
-            save_user_thread(message.author.id, thread.id)
-            logger.info(f"Message forwarded and thread created for {message.author.display_name} with thread ID {thread.id}")
-            await thread.send(content=f"<@{message.author.id}> の投票スレッドです。")
+            sent_message = await destination_channel.send(embed=embed, view=create_reaction_view(message.author.id))
+            thread_parent_channel = bot.get_channel(THREAD_PARENT_CHANNEL_ID)
+            if thread_parent_channel:
+                thread = await thread_parent_channel.create_thread(name=f"{message.author.display_name}の投票スレッド", message=sent_message)
+                save_user_thread(message.author.id, thread.id)
+                logger.info(f"Message forwarded and thread created for {message.author.display_name} with thread ID {thread.id}")
+                await thread.send(content=f"<@{message.author.id}> の投票スレッドです。")
+            else:
+                logger.error("Thread parent channel not found.")
         except Exception as e:
             logger.error(f"Failed to create thread: {e}")
 
