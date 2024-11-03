@@ -1,2 +1,3 @@
 discord.py[voice]
 psycopg2
+asyncpg
