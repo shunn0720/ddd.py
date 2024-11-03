@@ -48,18 +48,21 @@ class CommentModal(discord.ui.Modal):
             result = await connection.fetchrow("SELECT thread_id FROM user_threads WHERE user_id = $1", self.user_id)
             if result:
                 thread_id = result["thread_id"]
-                thread = await bot.fetch_channel(thread_id)
-                return thread
+                try:
+                    thread = await bot.fetch_channel(thread_id)
+                    return thread
+                except discord.NotFound:
+                    logging.error(f"Thread {thread_id} not found.")
+                    return None
             return None
 
     async def on_submit(self, interaction: discord.Interaction):
         thread = await self.fetch_thread()
         if thread is None:
-            logging.error(f"Thread {self.user_id} not found.")
-            await interaction.response.send_message("The thread could not be found.", ephemeral=True)
+            await interaction.response.send_message("The thread could not be found or may have been deleted.", ephemeral=True)
             return
 
-        if thread.archived:  # 修正: is_archived を archived に変更
+        if thread.archived:
             await thread.unarchive()
 
         comment = self.children[0].value
