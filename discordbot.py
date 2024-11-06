@@ -18,7 +18,7 @@ intents.members = True
 # 環境変数の読み込み
 load_dotenv()
 DATABASE_URL = os.getenv("DATABASE_URL")
-DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")  # Heroku環境変数のトークン名に変更
+DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")  # 環境変数名に修正
 
 # トークン存在確認
 if DISCORD_TOKEN is None:
@@ -209,4 +209,4 @@ async def on_message(message):
             logger.error(f"スレッド作成に失敗しました: {e}")
 
 # Botの起動
-bot.run(DISCORD_TOKEN)
+bot.run(TOKEN)
