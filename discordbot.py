@@ -4,6 +4,7 @@ import logging
 import psycopg2
 from discord.ext import commands
 from discord.ui import Button, View, Modal, TextInput
+from dotenv import load_dotenv
 
 # ログの設定
 logging.basicConfig(level=logging.INFO)
@@ -14,19 +15,20 @@ intents.message_content = True
 intents.reactions = True
 intents.members = True
 
-# Herokuの環境変数からトークンとデータベースURLを取得
+# 環境変数の読み込み
+load_dotenv()
 DATABASE_URL = os.getenv("DATABASE_URL")
-TOKEN = os.getenv("DISCORD_TOKEN")  # Herokuの環境変数名に合わせて修正
+DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")  # Heroku環境変数のトークン名に変更
 
-# TOKEN の存在確認を追加
-if TOKEN is None:
+# トークン存在確認
+if DISCORD_TOKEN is None:
     logger.error("環境変数 DISCORD_TOKEN が設定されていません。Herokuのダッシュボードで設定してください。")
     exit(1)  # プログラムを終了
 
-# チャンネルIDを設定
+# チャンネルIDの設定
 SOURCE_CHANNEL_IDS = [1299231408551755838, 1299231612944257036]
 DESTINATION_CHANNEL_ID = 1299231533437292596
-THREAD_PARENT_CHANNEL_ID = 1299231693336743996 
+THREAD_PARENT_CHANNEL_ID = 1299231693336743996
 
 # ボタンの選択肢とスコア
 reaction_options = [
@@ -103,7 +105,7 @@ async def on_ready():
 # ボタン押下時の処理
 async def on_button_click(interaction: discord.Interaction):
     custom_id = interaction.data["custom_id"]
-    modal = CommentModal(type=int(custom_id[-1]))  # カスタムIDの最後の数字を使用
+    modal = CommentModal(type=int(custom_id[-1]))
     await interaction.response.send_modal(modal)
 
 class CommentModal(Modal):
@@ -164,7 +166,7 @@ def create_reaction_view():
     return view
 
 @bot.event
-async def on_interaction(interaction:discord.Interaction):
+async def on_interaction(interaction: discord.Interaction):
     try:
         if interaction.data['component_type'] == 2:
             await on_button_click(interaction)
@@ -207,4 +209,4 @@ async def on_message(message):
             logger.error(f"スレッド作成に失敗しました: {e}")
 
 # Botの起動
-bot.run(TOKEN)
+bot.run(DISCORD_TOKEN)
