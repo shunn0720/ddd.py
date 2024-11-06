@@ -21,7 +21,6 @@ load_dotenv()
 DATABASE_URL = os.getenv("DATABASE_URL")
 TOKEN = os.getenv('DISCORD_TOKEN')
 
-
 # チャンネルIDを設定
 SOURCE_CHANNEL_IDS = [1299231408551755838, 1299231612944257036]
 DESTINATION_CHANNEL_ID = 1299231533437292596
@@ -38,7 +37,8 @@ reaction_options = [
 def init_db():
     conn = None
     try:
-        conn = psycopg2.connect(DATABASE_URL, sslmode='disable')
+        # SSL モードを 'require' に設定して接続
+        conn = psycopg2.connect(DATABASE_URL, sslmode='require')
         with conn.cursor() as cur:
             cur.execute('''
                 CREATE TABLE IF NOT EXISTS user_threads (
@@ -47,9 +47,9 @@ def init_db():
                 )
             ''')
         conn.commit()
-        print("Database initialized")
+        logger.info("Database initialized")
     except Exception as e:
-        print(f"Error initializing database: {e}")
+        logger.error(f"Error initializing database: {e}")
     finally:
         if conn:
             conn.close()
@@ -58,7 +58,7 @@ def init_db():
 def save_thread_data(user_id, thread_id):
     conn = None
     try:
-        conn = psycopg2.connect(DATABASE_URL, sslmode='disable')
+        conn = psycopg2.connect(DATABASE_URL, sslmode='require')
         with conn.cursor() as cur:
             cur.execute('''
                 INSERT INTO user_threads (user_id, thread_id)
@@ -67,9 +67,9 @@ def save_thread_data(user_id, thread_id):
                 SET thread_id = EXCLUDED.thread_id
             ''', (user_id, thread_id))
         conn.commit()
-        print(f"Thread data saved: {user_id}, {thread_id}")
+        logger.info(f"Thread data saved: {user_id}, {thread_id}")
     except Exception as e:
-        print(f"Error saving thread data: {e}")
+        logger.error(f"Error saving thread data: {e}")
     finally:
         if conn:
             conn.close()
@@ -78,7 +78,7 @@ def save_thread_data(user_id, thread_id):
 def get_thread_data(user_id):
     conn = None
     try:
-        conn = psycopg2.connect(DATABASE_URL, sslmode='disable')
+        conn = psycopg2.connect(DATABASE_URL, sslmode='require')
         with conn.cursor() as cur:
             cur.execute('''
                 SELECT thread_id FROM user_threads WHERE user_id = %s
@@ -86,7 +86,7 @@ def get_thread_data(user_id):
             result = cur.fetchone()
             return result[0] if result else None
     except Exception as e:
-        print(f"スレッドデータの取得に失敗しました: {e}")
+        logger.error(f"スレッドデータの取得に失敗しました: {e}")
         return None
     finally:
         if conn:
@@ -157,7 +157,6 @@ class CommentModal(Modal):
                 inline=False
             )
 
-        # スレッドにメッセージを送信
             await thread.send(embed=embed)
             await interaction.response.send_message("投票ありがとう！", ephemeral=True)
         except Exception as e:
@@ -180,7 +179,6 @@ async def on_interaction(interaction:discord.Interaction):
     try:
         if interaction.data['component_type'] == 2:
             custom_id = interaction.data["custom_id"]
-            print(custom_id)
             await on_button_click(interaction)
     except KeyError:
         pass
