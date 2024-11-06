@@ -4,7 +4,6 @@ import logging
 import psycopg2
 from discord.ext import commands
 from discord.ui import Button, View, Modal, TextInput
-
 from dotenv import load_dotenv
 
 # ログの設定
@@ -19,7 +18,7 @@ intents.members = True
 # Herokuの環境変数からトークンとデータベースURLを取得
 load_dotenv()
 DATABASE_URL = os.getenv("DATABASE_URL")
-TOKEN = os.getenv('DISCORD_TOKEN')
+TOKEN = os.getenv("DISCORD_TOKEN")
 
 # チャンネルIDを設定
 SOURCE_CHANNEL_IDS = [1299231408551755838, 1299231612944257036]
@@ -37,8 +36,7 @@ reaction_options = [
 def init_db():
     conn = None
     try:
-        # SSL モードを 'require' に設定して接続
-        conn = psycopg2.connect(DATABASE_URL, sslmode='require')
+        conn = psycopg2.connect(DATABASE_URL, sslmode='disable')
         with conn.cursor() as cur:
             cur.execute('''
                 CREATE TABLE IF NOT EXISTS user_threads (
@@ -54,11 +52,10 @@ def init_db():
         if conn:
             conn.close()
 
-# スレッドデータをデータベースに保存
 def save_thread_data(user_id, thread_id):
     conn = None
     try:
-        conn = psycopg2.connect(DATABASE_URL, sslmode='require')
+        conn = psycopg2.connect(DATABASE_URL, sslmode='disable')
         with conn.cursor() as cur:
             cur.execute('''
                 INSERT INTO user_threads (user_id, thread_id)
@@ -67,24 +64,25 @@ def save_thread_data(user_id, thread_id):
                 SET thread_id = EXCLUDED.thread_id
             ''', (user_id, thread_id))
         conn.commit()
-        logger.info(f"Thread data saved: {user_id}, {thread_id}")
+        logger.info(f"Thread data saved: user_id={user_id}, thread_id={thread_id}")
     except Exception as e:
         logger.error(f"Error saving thread data: {e}")
     finally:
         if conn:
             conn.close()
 
-# スレッドデータをデータベースから取得
 def get_thread_data(user_id):
     conn = None
     try:
-        conn = psycopg2.connect(DATABASE_URL, sslmode='require')
+        conn = psycopg2.connect(DATABASE_URL, sslmode='disable')
         with conn.cursor() as cur:
             cur.execute('''
                 SELECT thread_id FROM user_threads WHERE user_id = %s
             ''', (user_id,))
             result = cur.fetchone()
-            return result[0] if result else None
+            thread_id = result[0] if result else None
+            logger.info(f"Retrieved thread ID for user {user_id}: {thread_id}")
+            return thread_id
     except Exception as e:
         logger.error(f"スレッドデータの取得に失敗しました: {e}")
         return None
@@ -92,7 +90,6 @@ def get_thread_data(user_id):
         if conn:
             conn.close()
 
-# Bot設定
 bot = commands.Bot(command_prefix='!', intents=intents)
 
 @bot.event
@@ -100,7 +97,6 @@ async def on_ready():
     logger.info(f'Logged in as {bot.user}')
     init_db()
 
-# ボタン押下時の処理
 async def on_button_click(interaction: discord.Interaction):
     custom_id = interaction.data["custom_id"]
     modal = CommentModal(type=int(custom_id[-1]))
@@ -109,7 +105,6 @@ async def on_button_click(interaction: discord.Interaction):
 class CommentModal(Modal):
     def __init__(self, type):
         super().__init__(title="投票画面", custom_id=str(type))
-
         self.comment = TextInput(
             label="コメント",
             style=discord.TextStyle.paragraph,
@@ -122,47 +117,35 @@ class CommentModal(Modal):
         try:
             custom_id = interaction.data["custom_id"]
             option_index = int(custom_id[-1])
-        
+
             if option_index < 0 or option_index >= len(reaction_options):
                 await interaction.response.send_message("無効なオプションが選択されました。", ephemeral=True)
                 return
-        
+
             option = reaction_options[option_index]
             thread_id = get_thread_data(interaction.user.id)
-
             if thread_id is None:
                 await interaction.response.send_message("スレッドが見つかりませんでした。", ephemeral=True)
                 return
 
             thread = bot.get_channel(thread_id)
             if thread is None:
+                logger.error(f"Thread ID {thread_id} not found or inaccessible.")
                 await interaction.response.send_message("スレッドが見つかりませんでした。", ephemeral=True)
                 return
 
             embed = discord.Embed(color=option['color'])
             embed.set_author(name=interaction.user.display_name, icon_url=interaction.user.display_avatar.url)
-            embed.add_field(
-                name="リアクション結果",
-                value=f"{interaction.user.display_name} が '{option['label']}' を押しました。",
-                inline=False
-            )
-            embed.add_field(
-                name="点数",
-                value=f"{option['score']}点",
-                inline=False
-            )
-            embed.add_field(
-                name="コメント",
-                value=self.comment.value if self.comment.value else "コメントなし",
-                inline=False
-            )
+            embed.add_field(name="リアクション結果", value=f"{interaction.user.display_name} が '{option['label']}' を押しました。", inline=False)
+            embed.add_field(name="点数", value=f"{option['score']}点", inline=False)
+            embed.add_field(name="コメント", value=self.comment.value if self.comment.value else "コメントなし", inline=False)
 
             await thread.send(embed=embed)
             await interaction.response.send_message("投票ありがとう！", ephemeral=True)
         except Exception as e:
+            logger.error(f"エラーが発生しました: {str(e)}")
             await interaction.response.send_message(f"エラーが発生しました: {str(e)}", ephemeral=True)
-            
-# ボタンのクラス
+
 class ReactionButton(Button):
     def __init__(self, label, color, score, custom_id):
         super().__init__(label=label, style=discord.ButtonStyle.primary if color == discord.Color.green() else discord.ButtonStyle.danger)
@@ -179,6 +162,7 @@ async def on_interaction(interaction:discord.Interaction):
     try:
         if interaction.data['component_type'] == 2:
             custom_id = interaction.data["custom_id"]
+            logger.info(f"Button clicked with custom_id: {custom_id}")
             await on_button_click(interaction)
     except KeyError:
         pass
