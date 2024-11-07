@@ -198,4 +198,4 @@ async def on_message(message):
         except discord.HTTPException as e:
             logger.error(f"スレッド作成に失敗しました: {e}")
 
-bot.run(TOKEN)
+bot.run(DISCORD_TOKEN)
