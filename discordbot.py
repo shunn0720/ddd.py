@@ -4,23 +4,22 @@ import logging
 import psycopg2
 from discord.ext import commands
 from discord.ui import Button, View, Modal, TextInput
-from dotenv import load_dotenv
 
 # ログの設定
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Intents設定
 intents = discord.Intents.default()
 intents.message_content = True
 intents.reactions = True
 intents.members = True
 
-# Herokuの環境変数からトークンとデータベースURLを取得
-load_dotenv()
+# Heroku環境変数からトークンとデータベースURLを取得
 DATABASE_URL = os.getenv("DATABASE_URL")
-TOKEN = os.getenv("DISCORD_TOKEN")
+DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 
-# チャンネルIDを設定
+# チャンネルIDの設定
 SOURCE_CHANNEL_IDS = [1299231408551755838, 1299231612944257036]
 DESTINATION_CHANNEL_ID = 1299231533437292596
 THREAD_PARENT_CHANNEL_ID = 1299231693336743996
@@ -34,9 +33,10 @@ reaction_options = [
 ]
 
 def init_db():
+    """データベースの初期化"""
     conn = None
     try:
-        conn = psycopg2.connect(DATABASE_URL, sslmode='disable')
+        conn = psycopg2.connect(DATABASE_URL, sslmode='require')
         with conn.cursor() as cur:
             cur.execute('''
                 CREATE TABLE IF NOT EXISTS user_threads (
@@ -53,9 +53,10 @@ def init_db():
             conn.close()
 
 def save_thread_data(user_id, thread_id):
+    """スレッドデータをデータベースに保存"""
     conn = None
     try:
-        conn = psycopg2.connect(DATABASE_URL, sslmode='disable')
+        conn = psycopg2.connect(DATABASE_URL, sslmode='require')
         with conn.cursor() as cur:
             cur.execute('''
                 INSERT INTO user_threads (user_id, thread_id)
@@ -64,7 +65,7 @@ def save_thread_data(user_id, thread_id):
                 SET thread_id = EXCLUDED.thread_id
             ''', (user_id, thread_id))
         conn.commit()
-        logger.info(f"Thread data saved: user_id={user_id}, thread_id={thread_id}")
+        logger.info(f"Thread data saved: {user_id}, {thread_id}")
     except Exception as e:
         logger.error(f"Error saving thread data: {e}")
     finally:
@@ -72,17 +73,14 @@ def save_thread_data(user_id, thread_id):
             conn.close()
 
 def get_thread_data(user_id):
+    """スレッドデータをデータベースから取得"""
     conn = None
     try:
-        conn = psycopg2.connect(DATABASE_URL, sslmode='disable')
+        conn = psycopg2.connect(DATABASE_URL, sslmode='require')
         with conn.cursor() as cur:
-            cur.execute('''
-                SELECT thread_id FROM user_threads WHERE user_id = %s
-            ''', (user_id,))
+            cur.execute('SELECT thread_id FROM user_threads WHERE user_id = %s', (user_id,))
             result = cur.fetchone()
-            thread_id = result[0] if result else None
-            logger.info(f"Retrieved thread ID for user {user_id}: {thread_id}")
-            return thread_id
+            return result[0] if result else None
     except Exception as e:
         logger.error(f"スレッドデータの取得に失敗しました: {e}")
         return None
@@ -90,6 +88,7 @@ def get_thread_data(user_id):
         if conn:
             conn.close()
 
+# Botの設定
 bot = commands.Bot(command_prefix='!', intents=intents)
 
 @bot.event
@@ -97,6 +96,7 @@ async def on_ready():
     logger.info(f'Logged in as {bot.user}')
     init_db()
 
+# ボタン押下時の処理
 async def on_button_click(interaction: discord.Interaction):
     custom_id = interaction.data["custom_id"]
     modal = CommentModal(type=int(custom_id[-1]))
@@ -124,13 +124,13 @@ class CommentModal(Modal):
 
             option = reaction_options[option_index]
             thread_id = get_thread_data(interaction.user.id)
+
             if thread_id is None:
                 await interaction.response.send_message("スレッドが見つかりませんでした。", ephemeral=True)
                 return
 
             thread = bot.get_channel(thread_id)
             if thread is None:
-                logger.error(f"Thread ID {thread_id} not found or inaccessible.")
                 await interaction.response.send_message("スレッドが見つかりませんでした。", ephemeral=True)
                 return
 
@@ -143,7 +143,6 @@ class CommentModal(Modal):
             await thread.send(embed=embed)
             await interaction.response.send_message("投票ありがとう！", ephemeral=True)
         except Exception as e:
-            logger.error(f"エラーが発生しました: {str(e)}")
             await interaction.response.send_message(f"エラーが発生しました: {str(e)}", ephemeral=True)
 
 class ReactionButton(Button):
@@ -158,20 +157,17 @@ def create_reaction_view():
     return view
 
 @bot.event
-async def on_interaction(interaction:discord.Interaction):
-    try:
-        if interaction.data['component_type'] == 2:
-            custom_id = interaction.data["custom_id"]
-            logger.info(f"Button clicked with custom_id: {custom_id}")
+async def on_interaction(interaction: discord.Interaction):
+    if interaction.type == discord.InteractionType.component:
+        custom_id = interaction.data.get("custom_id")
+        if custom_id and custom_id.startswith("type"):
             await on_button_click(interaction)
-    except KeyError:
-        pass
 
 @bot.event
 async def on_message(message):
     if message.channel.id in SOURCE_CHANNEL_IDS and not message.author.bot:
         destination_channel = bot.get_channel(DESTINATION_CHANNEL_ID)
-        if destination_channel is None:
+        if not destination_channel:
             logger.error("転送先チャンネルが見つかりませんでした。")
             return
 
@@ -192,7 +188,7 @@ async def on_message(message):
             return
 
         thread_parent_channel = bot.get_channel(THREAD_PARENT_CHANNEL_ID)
-        if thread_parent_channel is None:
+        if not thread_parent_channel:
             logger.error("スレッド親チャンネルが見つかりませんでした。")
             return
 
