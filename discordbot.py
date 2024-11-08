@@ -3,7 +3,7 @@ import os
 import logging
 import psycopg2
 from discord.ext import commands
-from discord.ui import Button, View, Modal, TextInput
+from discord.ui import Button, View
 
 # ログの設定
 logging.basicConfig(level=logging.INFO)
@@ -77,12 +77,18 @@ def save_vote_data(user_id, voter_id, reaction_type, score):
             conn.close()
 
 # Botの設定
-bot = commands.Bot(command_prefix='!', intents=intents)
+bot = commands.Bot(command_prefix='!', intents=intents, reconnect=True)
 
 @bot.event
 async def on_ready():
     logger.info(f'Logged in as {bot.user}')
     init_db()
+
+@bot.event
+async def on_disconnect():
+    # 切断された際の処理
+    logger.warning("Bot disconnected. Trying to reconnect...")
+    await asyncio.sleep(5)
 
 # ボタン押下時の処理
 async def on_button_click(interaction: discord.Interaction):
