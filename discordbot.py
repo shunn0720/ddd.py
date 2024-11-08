@@ -2,6 +2,7 @@ import discord
 import os
 import logging
 import psycopg2
+import asyncio
 from discord.ext import commands
 from discord.ui import Button, View
 
@@ -77,7 +78,7 @@ def save_vote_data(user_id, voter_id, reaction_type, score):
             conn.close()
 
 # Botの設定
-bot = commands.Bot(command_prefix='!', intents=intents, reconnect=True)
+bot = commands.Bot(command_prefix='!', intents=intents)
 
 @bot.event
 async def on_ready():
@@ -87,8 +88,15 @@ async def on_ready():
 @bot.event
 async def on_disconnect():
     # 切断された際の処理
-    logger.warning("Bot disconnected. Trying to reconnect...")
-    await asyncio.sleep(5)
+    logger.warning("Bot disconnected. Attempting reconnection...")
+
+async def run_bot():
+    while True:
+        try:
+            await bot.start(DISCORD_TOKEN)
+        except Exception as e:
+            logger.error(f"Bot encountered an error: {e}")
+            await asyncio.sleep(5)  # 少し待ってから再試行
 
 # ボタン押下時の処理
 async def on_button_click(interaction: discord.Interaction):
@@ -145,4 +153,5 @@ async def on_message(message):
         except discord.HTTPException as e:
             logger.error(f"メッセージの送信に失敗しました: {e}")
 
-bot.run(DISCORD_TOKEN)
+# 非同期ループでボットを実行
+asyncio.run(run_bot())
