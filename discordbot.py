@@ -1,157 +1,161 @@
-import discord
 import os
-import logging
-import psycopg2
-import asyncio
+import discord
 from discord.ext import commands
-from discord.ui import Button, View
+import psycopg2
+import random
 
-# ログの設定
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# Intents設定
+# DiscordとHerokuの設定
 intents = discord.Intents.default()
-intents.message_content = True
-intents.reactions = True
-intents.members = True
+bot = commands.Bot(command_prefix="!", intents=intents)
 
-# Heroku環境変数からトークンとデータベースURLを取得
-DATABASE_URL = os.getenv("DATABASE_URL")
-DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
+DATABASE_URL = os.getenv('DATABASE_URL')  # HerokuのPostgreSQL URL
+conn = psycopg2.connect(DATABASE_URL, sslmode='require')
+cursor = conn.cursor()
 
-# チャンネルIDの設定
-SOURCE_CHANNEL_IDS = [1299231408551755838, 1299231612944257036]
-DESTINATION_CHANNEL_ID = 1299231533437292596
-THREAD_PARENT_CHANNEL_ID = 1299231693336743996
+# 各種ID設定
+FORUM_CHANNEL_ID = 1288321432828248124  # フォーラムチャンネルID
+THREAD_ID = 1288407362318893109         # スレッドID
+READ_LATER_REACTION_ID = 1307321645480022046
+FAVORITE_REACTION_ID = 1307735348184354846
+RANDOM_EXCLUDE_REACTION_ID = 1304763661172346973
+READ_LATER_INCLUDE_REACTION_ID = 1306461538659340308
 
-# ボタンの選択肢とスコア
-reaction_options = [
-    {"label": "入ってほしい！", "color": discord.Color.green(), "score": 2, "custom_id": "type1"},
-    {"label": "良い人！", "color": discord.Color.green(), "score": 1, "custom_id": "type2"},
-    {"label": "微妙", "color": discord.Color.red(), "score": -1, "custom_id": "type3"},
-    {"label": "入ってほしくない", "color": discord.Color.red(), "score": -2, "custom_id": "type4"}
-]
+# Embedを作成する関数
+def create_embed(result: str = None):
+    description = (
+        "botがｴﾛ漫画を選んでくれるよ！<a:c296:1288305823323263029>\n\n"
+        "🔵：自分の<:b431:1289782471197458495>を除外しない\n"
+        "🔴：自分の<:b431:1289782471197458495>を除外する\n\n"
+        "**【ランダム】**　：全体から選ぶ\n"
+        "**【あとで読む】**：<:b434:1304690617405669376>を付けた投稿から選ぶ\n"
+        "**【お気に入り】**：<:b435:1304690627723657267>を付けた投稿から選ぶ"
+    )
+    if result:
+        description += f"\n\n**結果**: {result}"
 
-def init_db():
-    """データベースの初期化"""
-    conn = None
-    try:
-        conn = psycopg2.connect(DATABASE_URL, sslmode='require')
-        with conn.cursor() as cur:
-            cur.execute('''
-                CREATE TABLE IF NOT EXISTS user_votes (
-                    user_id BIGINT,
-                    voter_id BIGINT,
-                    reaction_type TEXT NOT NULL,
-                    score INT NOT NULL,
-                    PRIMARY KEY (user_id, voter_id)
-                )
-            ''')
-        conn.commit()
-        logger.info("Database initialized")
-    except Exception as e:
-        logger.error(f"Error initializing database: {e}")
-    finally:
-        if conn:
-            conn.close()
-
-def save_vote_data(user_id, voter_id, reaction_type, score):
-    """投票データをデータベースに保存（既存の投票は更新）"""
-    conn = None
-    try:
-        conn = psycopg2.connect(DATABASE_URL, sslmode='require')
-        with conn.cursor() as cur:
-            cur.execute('''
-                INSERT INTO user_votes (user_id, voter_id, reaction_type, score)
-                VALUES (%s, %s, %s, %s)
-                ON CONFLICT (user_id, voter_id) DO UPDATE
-                SET reaction_type = EXCLUDED.reaction_type,
-                    score = EXCLUDED.score
-            ''', (user_id, voter_id, reaction_type, score))
-        conn.commit()
-        logger.info(f"Vote data saved: user_id={user_id}, voter_id={voter_id}, reaction={reaction_type}")
-    except Exception as e:
-        logger.error(f"Error saving vote data: {e}")
-    finally:
-        if conn:
-            conn.close()
-
-# Botの設定
-bot = commands.Bot(command_prefix='!', intents=intents)
-
-@bot.event
-async def on_ready():
-    logger.info(f'Logged in as {bot.user}')
-    init_db()
-
-@bot.event
-async def on_disconnect():
-    # 切断された際の処理
-    logger.warning("Bot disconnected. Attempting reconnection...")
-
-async def run_bot():
-    while True:
-        try:
-            await bot.start(DISCORD_TOKEN)
-        except Exception as e:
-            logger.error(f"Bot encountered an error: {e}")
-            await asyncio.sleep(5)  # 少し待ってから再試行
-
-# ボタン押下時の処理
-async def on_button_click(interaction: discord.Interaction):
-    custom_id = interaction.data["custom_id"]
-    option_index = int(custom_id[-1]) - 1  # 選択肢のインデックス
-    option = reaction_options[option_index]
-    
-    # 投票データの保存（更新または挿入）
-    save_vote_data(
-        user_id=interaction.message.author.id,       # 対象ユーザーのID
-        voter_id=interaction.user.id,                # 投票者のID
-        reaction_type=option["label"],               # 投票内容（ラベル）
-        score=option["score"]                        # スコア
+    return discord.Embed(
+        title="おすすめ漫画セレクター",
+        description=description,
+        color=discord.Color.magenta()
     )
 
-    # 投票結果をスレッドに送信
-    embed = discord.Embed(color=option["color"])
-    embed.set_author(name=interaction.user.display_name, icon_url=interaction.user.display_avatar.url)
-    embed.add_field(name="リアクション結果", value=f"{interaction.user.display_name} が '{option['label']}' を押しました。", inline=False)
-    embed.add_field(name="点数", value=f"{option['score']}点", inline=False)
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+# ボタンを作成する関数
+def create_view():
+    view = discord.ui.View(timeout=None)  # ボタンのタイムアウトを無効化
+    # 上段のボタン（青色）
+    top_row_buttons = [
+        {"label": "ランダム(通常)", "action": "recommend_manga", "style": discord.ButtonStyle.primary},
+        {"label": "あとで読む(通常)", "action": "later_read", "style": discord.ButtonStyle.primary},
+        {"label": "お気に入り", "action": "favorite", "style": discord.ButtonStyle.primary}
+    ]
+    for button in top_row_buttons:
+        view.add_item(discord.ui.Button(label=button["label"], custom_id=button["action"], style=button["style"], row=0))
 
-class ReactionButton(Button):
-    def __init__(self, label, color, score, custom_id):
-        super().__init__(label=label, style=discord.ButtonStyle.primary if color == discord.Color.green() else discord.ButtonStyle.danger)
-        self.custom_id = custom_id
+    # 下段のボタン（赤色）
+    bottom_row_buttons = [
+        {"label": "ランダム", "action": "random_exclude", "style": discord.ButtonStyle.danger},
+        {"label": "あとで読む", "action": "read_later_exclude", "style": discord.ButtonStyle.danger}
+    ]
+    for button in bottom_row_buttons:
+        view.add_item(discord.ui.Button(label=button["label"], custom_id=button["action"], style=button["style"], row=1))
 
-def create_reaction_view():
-    view = View(timeout=None)
-    for option in reaction_options:
-        view.add_item(ReactionButton(label=option["label"], color=option["color"], score=option["score"], custom_id=option["custom_id"]))
     return view
 
+# ボタン付きメッセージを生成
+async def create_button_message(channel):
+    """
+    ボタン付きメッセージを送信し、データベースに保存。
+    """
+    embed = create_embed()
+    view = create_view()
+    message = await channel.send(embed=embed, view=view)
+    return message
+
+# ボタンのアクションに対応する処理
+async def handle_interaction(interaction, action: str):
+    # 初期化
+    forum_channel = bot.get_channel(FORUM_CHANNEL_ID)
+    thread = forum_channel.get_thread(THREAD_ID)
+    messages = [message async for message in thread.history(limit=100)]
+    result = "条件に合うメッセージが見つかりませんでした。"
+
+    # 各アクションの処理
+    if action == "recommend_manga":
+        if messages:
+            random_message = random.choice(messages)
+            result = f"おすすめの漫画はこちら: [リンク](https://discord.com/channels/{random_message.guild.id}/{random_message.channel.id}/{random_message.id})"
+    elif action == "later_read":
+        filtered = [
+            msg for msg in messages if any(
+                reaction.emoji.id == READ_LATER_REACTION_ID for reaction in msg.reactions if hasattr(reaction.emoji, 'id')
+            )
+        ]
+        if filtered:
+            random_message = random.choice(filtered)
+            result = f"あとで読む: [リンク](https://discord.com/channels/{random_message.guild.id}/{random_message.channel.id}/{random_message.id})"
+    elif action == "favorite":
+        filtered = [
+            msg for msg in messages if any(
+                reaction.emoji.id == FAVORITE_REACTION_ID for reaction in msg.reactions if hasattr(reaction.emoji, 'id')
+            )
+        ]
+        if filtered:
+            random_message = random.choice(filtered)
+            result = f"お気に入り: [リンク](https://discord.com/channels/{random_message.guild.id}/{random_message.channel.id}/{random_message.id})"
+    elif action == "random_exclude":
+        filtered = [
+            msg for msg in messages if not any(
+                reaction.emoji.id == RANDOM_EXCLUDE_REACTION_ID for reaction in msg.reactions if hasattr(reaction.emoji, 'id')
+            )
+        ]
+        if filtered:
+            random_message = random.choice(filtered)
+            result = f"ランダム(除外): [リンク](https://discord.com/channels/{random_message.guild.id}/{random_message.channel.id}/{random_message.id})"
+    elif action == "read_later_exclude":
+        filtered = [
+            msg for msg in messages if not any(
+                reaction.emoji.id == RANDOM_EXCLUDE_REACTION_ID for reaction in msg.reactions if hasattr(reaction.emoji, 'id')
+            ) and any(
+                reaction.emoji.id == READ_LATER_INCLUDE_REACTION_ID for reaction in msg.reactions if hasattr(reaction.emoji, 'id')
+            )
+        ]
+        if filtered:
+            random_message = random.choice(filtered)
+            result = f"あとで読む(除外): [リンク](https://discord.com/channels/{random_message.guild.id}/{random_message.channel.id}/{random_message.id})"
+
+    # メッセージを更新
+    updated_embed = create_embed(result)
+    await interaction.message.edit(embed=updated_embed, view=create_view())
+    await interaction.response.defer()  # 反応を遅らせて処理を継続
+
+# ボタンクリックのインタラクション処理
 @bot.event
-async def on_message(message):
-    if message.channel.id in SOURCE_CHANNEL_IDS and not message.author.bot:
-        destination_channel = bot.get_channel(DESTINATION_CHANNEL_ID)
-        if not destination_channel:
-            logger.error("転送先チャンネルが見つかりませんでした。")
-            return
+async def on_interaction(interaction: discord.Interaction):
+    try:
+        # カスタムIDを取得
+        action = interaction.data['custom_id']
+        
+        # 有効なアクションを実行
+        await handle_interaction(interaction, action)
+    except KeyError:
+        # 未定義のカスタムIDが押された場合
+        await interaction.response.send_message("このアクションは現在サポートされていません。", ephemeral=True)
+    except discord.errors.NotFound:
+        # メッセージが削除されている場合
+        await interaction.response.send_message("対象のメッセージが見つかりませんでした。", ephemeral=True)
+    except discord.errors.InteractionResponded:
+        # 既に応答が完了している場合（予防的な処理）
+        print("インタラクションに対するレスポンスが既に送信されています。")
+    except Exception as e:
+        # その他の予期しないエラーをキャッチ
+        print(f"インタラクション処理中にエラーが発生しました: {e}")
+        await interaction.response.send_message("エラーが発生しました。管理者に報告してください。", ephemeral=True)
 
-        embed = discord.Embed(color=discord.Color.blue())
-        embed.set_author(name=message.author.display_name)
-        embed.set_thumbnail(url=message.author.display_avatar.url)
-        embed.add_field(
-            name="🌱つぼみ審査投票フォーム",
-            value="必ずこのサーバーでお話した上で投票をお願いします。\n複数回投票した場合は、最新のものを反映します。\nこの方の入場について、NG等意見のある方はお問い合わせください。",
-            inline=False
-        )
+# コマンドでボタン付きメッセージを追加
+@bot.command()
+async def add_buttons(ctx):
+    await create_button_message(ctx.channel)
+    await ctx.send("ボタンを作成しました！")
 
-        view = create_reaction_view()
-        try:
-            await destination_channel.send(embed=embed, view=view)
-        except discord.HTTPException as e:
-            logger.error(f"メッセージの送信に失敗しました: {e}")
-
-# 非同期ループでボットを実行
-asyncio.run(run_bot())
+# Botの起動
+bot.run(os.getenv('DISCORD_TOKEN'))
