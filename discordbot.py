@@ -7,99 +7,98 @@ import random
 
 # DiscordとHerokuの設定
 intents = discord.Intents.default()
+intents.messages = True
+intents.guilds = True
+intents.message_content = True  # 必須
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-DATABASE_URL = os.getenv('DATABASE_URL')  # HerokuのPostgreSQL URL
+DATABASE_URL = os.getenv('DATABASE_URL')
 conn = psycopg2.connect(DATABASE_URL, sslmode='require')
 cursor = conn.cursor()
 
 # 各種ID設定
-FORUM_CHANNEL_ID = 1288321432828248124  # フォーラムチャンネルID
-THREAD_ID = 1288407362318893109         # スレッドID
+FORUM_CHANNEL_ID = 1288321432828248124
+THREAD_ID = 1288407362318893109
 READ_LATER_REACTION_ID = 1307321645480022046
 FAVORITE_REACTION_ID = 1307735348184354846
-RANDOM_EXCLUDE_REACTION_ID = 1304763661172346973
-READ_LATER_INCLUDE_REACTION_ID = 1306461538659340308
 
-# Embedを作成する関数
 def create_embed(result: str = None):
-    description = (
-        "botがｴﾛ漫画を選んでくれるよ！<a:c296:1288305823323263029>\n\n"
-        "🔵：自分の<:b431:1289782471197458495>を除外しない\n"
-        "🔴：自分の<:b431:1289782471197458495>を除外する\n\n"
-        "**【ランダム】**　：全体から選ぶ\n"
-        "**【あとで読む】**：<:b434:1304690617405669376>を付けた投稿から選ぶ\n"
-        "**【お気に入り】**：<:b435:1304690627723657267>を付けた投稿から選ぶ"
-    )
+    description = "botがおすすめの漫画を選んでくれるよ！\n\n"
     if result:
-        description += f"\n\n**結果**: {result}"
-
+        description += f"**結果**: {result}"
     return discord.Embed(
         title="おすすめ漫画セレクター",
         description=description,
         color=discord.Color.magenta()
     )
 
-# ボタンを作成する関数
 def create_view():
-    view = discord.ui.View(timeout=None)  # ボタンのタイムアウトを無効化
-    # 上段のボタン（青色）
-    top_row_buttons = [
-        {"label": "ランダム(通常)", "action": "recommend_manga", "style": discord.ButtonStyle.primary},
-        {"label": "あとで読む(通常)", "action": "later_read", "style": discord.ButtonStyle.primary},
-        {"label": "お気に入り", "action": "favorite", "style": discord.ButtonStyle.primary}
-    ]
-    for button in top_row_buttons:
-        view.add_item(discord.ui.Button(label=button["label"], custom_id=button["action"], style=button["style"], row=0))
-
-    # 下段のボタン（赤色）
-    bottom_row_buttons = [
-        {"label": "ランダム", "action": "random_exclude", "style": discord.ButtonStyle.danger},
-        {"label": "あとで読む", "action": "read_later_exclude", "style": discord.ButtonStyle.danger}
-    ]
-    for button in bottom_row_buttons:
-        view.add_item(discord.ui.Button(label=button["label"], custom_id=button["action"], style=button["style"], row=1))
-
+    view = discord.ui.View(timeout=None)
+    view.add_item(discord.ui.Button(label="ランダム(通常)", custom_id="recommend_manga", style=discord.ButtonStyle.primary))
+    view.add_item(discord.ui.Button(label="あとで読む", custom_id="later_read", style=discord.ButtonStyle.primary))
+    view.add_item(discord.ui.Button(label="お気に入り", custom_id="favorite", style=discord.ButtonStyle.primary))
     return view
 
-# ボタン付きメッセージを生成
 async def create_button_message(channel):
-    """
-    ボタン付きメッセージを送信
-    """
     embed = create_embed()
     view = create_view()
     await channel.send(embed=embed, view=view)
 
-# スラッシュコマンドでボタン付きメッセージを表示
-@bot.tree.command(name="add", description="ボタン付きメッセージを表示します")
-async def add(interaction: discord.Interaction):
-    await create_button_message(interaction.channel)
-    await interaction.response.send_message("ボタンを作成しました！", ephemeral=True)
-
-# ボタンクリックのインタラクション処理
-@bot.event
-async def on_interaction(interaction: discord.Interaction):
+async def handle_interaction(interaction, action: str):
     try:
-        # カスタムIDを取得
-        action = interaction.data['custom_id']
-        
-        # 有効なアクションを実行
-        await handle_interaction(interaction, action)
-    except KeyError:
-        await interaction.response.send_message("このアクションは現在サポートされていません。", ephemeral=True)
+        forum_channel = bot.get_channel(FORUM_CHANNEL_ID)
+        thread = forum_channel.get_thread(THREAD_ID)
+        messages = [message async for message in thread.history(limit=100)]
+        result = "条件に合うメッセージが見つかりませんでした。"
+
+        if action == "recommend_manga":
+            if messages:
+                random_message = random.choice(messages)
+                result = f"おすすめの漫画はこちら: [リンク](https://discord.com/channels/{random_message.guild.id}/{random_message.channel.id}/{random_message.id})"
+        elif action == "later_read":
+            filtered = [
+                msg for msg in messages if any(
+                    reaction.emoji.id == READ_LATER_REACTION_ID for reaction in msg.reactions if hasattr(reaction.emoji, 'id')
+                )
+            ]
+            if filtered:
+                random_message = random.choice(filtered)
+                result = f"あとで読む: [リンク](https://discord.com/channels/{random_message.guild.id}/{random_message.channel.id}/{random_message.id})"
+        elif action == "favorite":
+            filtered = [
+                msg for msg in messages if any(
+                    reaction.emoji.id == FAVORITE_REACTION_ID for reaction in msg.reactions if hasattr(reaction.emoji, 'id')
+                )
+            ]
+            if filtered:
+                random_message = random.choice(filtered)
+                result = f"お気に入り: [リンク](https://discord.com/channels/{random_message.guild.id}/{random_message.channel.id}/{random_message.id})"
+
+        updated_embed = create_embed(result)
+        await interaction.message.edit(embed=updated_embed, view=create_view())
+        await interaction.response.defer()
+
     except Exception as e:
         print(f"インタラクション処理中にエラーが発生しました: {e}")
-        await interaction.response.send_message("エラーが発生しました。管理者に報告してください。", ephemeral=True)
+        await interaction.response.send_message("エラーが発生しました。再試行してください。", ephemeral=True)
 
-# Bot起動時の準備
+@bot.tree.command(name="add", description="ボタン付きメッセージを表示します")
+async def add(interaction: discord.Interaction):
+    await interaction.response.defer()
+    await create_button_message(interaction.channel)
+    await interaction.followup.send("ボタンを作成しました！", ephemeral=True)
+
 @bot.event
 async def on_ready():
     try:
-        await bot.tree.sync()  # スラッシュコマンドを同期
-        print(f"Logged in as {bot.user}")
+        await bot.tree.sync()
+        print("スラッシュコマンドが同期されました。")
     except Exception as e:
         print(f"スラッシュコマンドの同期中にエラーが発生しました: {e}")
+    print(f"Logged in as {bot.user}")
 
-# Botの起動
-bot.run(os.getenv('DISCORD_TOKEN'))
+@bot.event
+async def on_interaction(interaction: discord.Interaction):
+    try:
+        action = interaction.data['custom_id']
+        await handle_interaction(interaction, action
