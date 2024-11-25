@@ -15,6 +15,9 @@ FAVORITE_REACTION_ID = 1307735348184354846
 RANDOM_EXCLUDE_REACTION_ID = 1304763661172346973
 READ_LATER_INCLUDE_REACTION_ID = 1306461538659340308
 
+# ロールID
+ALLOWED_ROLES = [1283962068197965897, 1246804322969456772]  # 許可されたロールID
+
 # 共通の処理を関数化
 async def get_recommendation(action: str):
     """
@@ -117,23 +120,31 @@ async def on_interaction(interaction: discord.Interaction):
     except Exception as e:
         await interaction.response.send_message(f"エラーが発生しました: {e}", ephemeral=True)
 
-# 初回起動時にボタン付きメッセージを送信
-@bot.command()
-async def add(ctx):
-    embed = discord.Embed(
-        title="おすすめ漫画セレクター",
-        description=(
-            "botがｴﾛ漫画を選んでくれるよ！<a:c296:1288305823323263029>\n\n"
-            "🔵：自分の<:b431:1289782471197458495>を除外しない\n"
-            "🔴：自分の<:b431:1289782471197458495>を除外する\n\n"
-            "**【ランダム】**　：全体から選ぶ\n"
-            "**【あとで読む】**：<:b434:1304690617405669376>を付けた投稿から選ぶ\n"
-            "**【お気に入り】**：<:b435:1304690627723657267>を付けた投稿から選ぶ"
-        ),
-        color=discord.Color.magenta()
-    )
-    view = create_view()
-    await ctx.send(embed=embed, view=view)
+# メッセージの受信イベントを監視
+@bot.event
+async def on_message(message):
+    """
+    ユーザーが「パネル作成」と送信した際にボタンを作成します。
+    """
+    if message.content == "パネル作成":
+        # ロールを持っているか確認
+        if any(role.id in ALLOWED_ROLES for role in message.author.roles):
+            embed = discord.Embed(
+                title="おすすめ漫画セレクター",
+                description=(
+                    "botがｨﾛ漫画を選んでくれるよ！<a:c296:1288305823323263029>\n\n"
+                    "🔵：自分の<:b431:1289782471197458495>を除外しない\n"
+                    "🔴：自分の<:b431:1289782471197458495>を除外する\n\n"
+                    "**（ランダム）**：全体から選ぶ\n"
+                    "**（あとで読む）**：<:b434:1304690617405669376>を付けた投稿から選ぶ\n"
+                    "**（お気に入り）**：<:b435:1304690627723657267>を付けた投稿から選ぶ"
+                ),
+                color=discord.Color.magenta()
+            )
+            view = create_view()
+            await message.channel.send(embed=embed, view=view)
+        else:
+            await message.channel.send("このコマンドを実行する権限がありません。")
 
 # Botを起動
 bot.run(os.getenv("DISCORD_TOKEN"))
