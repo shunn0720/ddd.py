@@ -1,6 +1,7 @@
 import os
 import discord
 from discord.ext import commands
+from discord import app_commands
 import random
 
 # Bot設定
@@ -16,6 +17,9 @@ READ_LATER_REACTION_ID = 1307321645480022046
 FAVORITE_REACTION_ID = 1307735348184354846
 RANDOM_EXCLUDE_REACTION_ID = 1304763661172346973
 READ_LATER_INCLUDE_REACTION_ID = 1306461538659340308
+
+# コマンドを使用可能なロールID
+ALLOWED_ROLE_IDS = [1283962068197965897, 1246804322969456772]
 
 # 投稿を取得する関数
 async def get_recommendation(action: str):
@@ -87,21 +91,12 @@ class MangaSelectorView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-        # 上段: 青色ボタン
+        # ボタン追加
         self.add_item(discord.ui.Button(label="ランダム(通常)", style=discord.ButtonStyle.primary, custom_id="recommend_manga"))
         self.add_item(discord.ui.Button(label="あとで読む(通常)", style=discord.ButtonStyle.primary, custom_id="later_read"))
         self.add_item(discord.ui.Button(label="お気に入り", style=discord.ButtonStyle.primary, custom_id="favorite"))
-
-        # 下段: 赤色ボタン
         self.add_item(discord.ui.Button(label="ランダム", style=discord.ButtonStyle.danger, custom_id="random_exclude"))
         self.add_item(discord.ui.Button(label="あとで読む", style=discord.ButtonStyle.danger, custom_id="read_later_exclude"))
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        action = interaction.data["custom_id"]
-        result = await get_recommendation(action)
-        embed = self.create_embed(result)
-        await interaction.response.edit_message(embed=embed, view=self)
-        return True
 
     def create_embed(self, result):
         """
@@ -121,11 +116,18 @@ class MangaSelectorView(discord.ui.View):
             color=discord.Color.magenta()  # ピンク色
         )
 
-@bot.command()
-async def panel(ctx):
+# スラッシュコマンド `/パネル` 作成
+@bot.tree.command(name="パネル", description="おすすめ漫画セレクターパネルを表示します")
+async def panel(interaction: discord.Interaction):
     """
-    パネルを表示するコマンド。
+    パネルを表示するスラッシュコマンド。
     """
+    # ユーザーのロールを確認
+    if not any(role.id in ALLOWED_ROLE_IDS for role in interaction.user.roles):
+        await interaction.response.send_message("このコマンドを使用する権限がありません。", ephemeral=True)
+        return
+
+    # パネルを表示
     embed = discord.Embed(
         title="おすすめ漫画セレクター",
         description=(
@@ -139,9 +141,17 @@ async def panel(ctx):
         color=discord.Color.magenta()
     )
     view = MangaSelectorView()
-    await ctx.send(embed=embed, view=view)
+    await interaction.response.send_message(embed=embed, view=view)
 
-# Botを起動
+# Bot起動
+@bot.event
+async def on_ready():
+    try:
+        synced = await bot.tree.sync()  # スラッシュコマンドを同期
+        print(f"スラッシュコマンドを {len(synced)} 個同期しました。")
+    except Exception as e:
+        print(f"コマンド同期中にエラー: {e}")
+
 if DISCORD_TOKEN:
     bot.run(DISCORD_TOKEN)
 else:
