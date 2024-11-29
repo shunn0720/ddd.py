@@ -1,7 +1,6 @@
 import os
 import discord
 from discord.ext import commands
-import random
 
 # Bot設定
 intents = discord.Intents.default()
@@ -12,13 +11,14 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 
-# フォーラムやスレッドのID（必要に応じて設定）
+# フォーラムやスレッドのID
 FORUM_CHANNEL_ID = 1288321432828248124
 THREAD_ID = 1288407362318893109
-REACTION_ID = 1304759949309509672
+REACTION_ID = 1304759949309509672  # 対象リアクションのID
 
 # メッセージキャッシュを保持する辞書
 message_cache = {}
+
 
 async def update_message_cache(thread_id):
     """
@@ -31,6 +31,7 @@ async def update_message_cache(thread_id):
     if thread:
         message_cache[thread_id] = [message async for message in thread.history(limit=100)]
 
+
 async def get_cached_messages(thread_id):
     """
     キャッシュされたメッセージを取得。
@@ -40,16 +41,13 @@ async def get_cached_messages(thread_id):
         await update_message_cache(thread_id)
     return message_cache.get(thread_id, [])
 
-def has_reaction_from_user(message, reaction_id, user_id):
+
+async def get_reaction_users(reaction):
     """
-    指定されたユーザーが指定されたリアクションを押しているか確認。
+    指定されたリアクションを押したユーザーを取得する非同期関数。
     """
-    for reaction in message.reactions:
-        if hasattr(reaction.emoji, 'id') and reaction.emoji.id == reaction_id:
-            users = [user async for user in reaction.users()]
-            if any(user.id == user_id for user in users):
-                return True
-    return False
+    return [user async for user in reaction.users()]
+
 
 async def select_random_message(thread_id, user_id, filter_func=None):
     """
@@ -62,85 +60,85 @@ async def select_random_message(thread_id, user_id, filter_func=None):
         filtered_messages = [msg for msg in filtered_messages if filter_func(msg)]
     return random.choice(filtered_messages) if filtered_messages else None
 
+
+def has_user_reacted(message, user_id, reaction_id):
+    """
+    指定されたユーザーが特定のリアクションを押しているか確認。
+    """
+    for reaction in message.reactions:
+        if hasattr(reaction.emoji, 'id') and reaction.emoji.id == reaction_id:
+            users = await get_reaction_users(reaction)
+            if user_id in [user.id for user in users]:
+                return True
+    return False
+
+
 class MangaSelectorView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="あとで読む(通常)", style=discord.ButtonStyle.primary)
+    @discord.ui.button(label="ランダム(通常)", style=discord.ButtonStyle.primary)
+    async def recommend_manga(self, interaction: discord.Interaction, button: discord.ui.Button):
+        random_message = await select_random_message(
+            THREAD_ID, interaction.user.id,
+            filter_func=lambda msg: has_user_reacted(msg, interaction.user.id, REACTION_ID)
+        )
+        if random_message:
+            await interaction.response.send_message(
+                f"{interaction.user.mention} さんには、{random_message.author.display_name} さんが投稿したこの本がおすすめだよ！\nhttps://discord.com/channels/{random_message.guild.id}/{random_message.channel.id}/{random_message.id}"
+            )
+        else:
+            await interaction.response.send_message("条件に合う投稿が見つかりませんでした。", ephemeral=True)
+
+    @discord.ui.button(label="あとで読む", style=discord.ButtonStyle.primary)
     async def later_read(self, interaction: discord.Interaction, button: discord.ui.Button):
         random_message = await select_random_message(
             THREAD_ID, interaction.user.id,
-            filter_func=lambda msg: has_reaction_from_user(msg, REACTION_ID, interaction.user.id)
+            filter_func=lambda msg: not has_user_reacted(msg, interaction.user.id, REACTION_ID)
         )
         if random_message:
             await interaction.response.send_message(
-                f"{interaction.user.mention} さんには、{random_message.author.display_name} さんが投稿したこの本がおすすめだよ！\n"
-                f"https://discord.com/channels/{random_message.guild.id}/{random_message.channel.id}/{random_message.id}"
+                f"{interaction.user.mention} さんには、{random_message.author.display_name} さんが投稿したこの本がおすすめだよ！\nhttps://discord.com/channels/{random_message.guild.id}/{random_message.channel.id}/{random_message.id}"
             )
         else:
             await interaction.response.send_message("条件に合う投稿が見つかりませんでした。", ephemeral=True)
 
-    @discord.ui.button(label="お気に入り", style=discord.ButtonStyle.primary)
-    async def favorite(self, interaction: discord.Interaction, button: discord.ui.Button):
-        random_message = await select_random_message(
-            THREAD_ID, interaction.user.id,
-            filter_func=lambda msg: has_reaction_from_user(msg, REACTION_ID, interaction.user.id)
-        )
-        if random_message:
-            await interaction.response.send_message(
-                f"{interaction.user.mention} さんには、{random_message.author.display_name} さんが投稿したこの本がおすすめだよ！\n"
-                f"https://discord.com/channels/{random_message.guild.id}/{random_message.channel.id}/{random_message.id}"
-            )
-        else:
-            await interaction.response.send_message("条件に合う投稿が見つかりませんでした。", ephemeral=True)
 
-    @discord.ui.button(label="ランダム", style=discord.ButtonStyle.danger)
-    async def random_exclude(self, interaction: discord.Interaction, button: discord.ui.Button):
-        random_message = await select_random_message(
-            THREAD_ID, interaction.user.id,
-            filter_func=lambda msg: not has_reaction_from_user(msg, REACTION_ID, interaction.user.id)
-        )
-        if random_message:
-            await interaction.response.send_message(
-                f"{interaction.user.mention} さんには、{random_message.author.display_name} さんが投稿したこの本がおすすめだよ！\n"
-                f"https://discord.com/channels/{random_message.guild.id}/{random_message.channel.id}/{random_message.id}"
-            )
-        else:
-            await interaction.response.send_message("条件に合う投稿が見つかりませんでした。", ephemeral=True)
-
-    @discord.ui.button(label="あとで読む", style=discord.ButtonStyle.danger)
-    async def read_later_exclude(self, interaction: discord.Interaction, button: discord.ui.Button):
-        random_message = await select_random_message(
-            THREAD_ID, interaction.user.id,
-            filter_func=lambda msg: not has_reaction_from_user(msg, REACTION_ID, interaction.user.id) and has_reaction_from_user(msg, REACTION_ID, interaction.user.id)
-        )
-        if random_message:
-            await interaction.response.send_message(
-                f"{interaction.user.mention} さんには、{random_message.author.display_name} さんが投稿したこの本がおすすめだよ！\n"
-                f"https://discord.com/channels/{random_message.guild.id}/{random_message.channel.id}/{random_message.id}"
-            )
-        else:
-            await interaction.response.send_message("条件に合う投稿が見つかりませんでした。", ephemeral=True)
-
-@bot.command()
-async def panel(ctx):
+@bot.tree.command(name="panel", description="エロ漫画のルーレットパネルを表示します")
+async def panel(interaction: discord.Interaction):
     """
-    パネルを表示するコマンド。
+    パネルを表示するスラッシュコマンド。
     """
     embed = discord.Embed(
         title="🎯ｴﾛ漫画ﾙｰﾚｯﾄ",
         description=(
             "botがｴﾛ漫画を選んでくれるよ！<a:c296:1288305823323263029>\n\n"
-            "🔵：自分のリアクションを含む投稿\n"
-            "🔴：自分のリアクションを含まない投稿\n\n"
+            "🔵：自分の<:b431:1289782471197458495>を除外しない\n"
+            "🔴：自分の<:b431:1289782471197458495>を除外する\n\n"
             "【ランダム】　：全体から選ぶ\n"
-            "【あとで読む】：特定のリアクションを付けた投稿から選ぶ\n"
-            "【お気に入り】：お気に入りの投稿を選ぶ"
+            "【あとで読む】：<:b434:1304690617405669376>を付けた投稿から選ぶ\n"
+            "【お気に入り】：<:b435:1304690627723657267>を付けた投稿から選ぶ"
         ),
         color=discord.Color.magenta()
     )
     view = MangaSelectorView()
-    await ctx.send(embed=embed, view=view)
+    await interaction.response.send_message(embed=embed, view=view)
+
+
+@bot.event
+async def on_ready():
+    """
+    Botの起動時に呼び出されるイベント。
+    """
+    print(f"Bot logged in as {bot.user} (ID: {bot.user.id})")
+    print("------")
+    # スラッシュコマンドの同期
+    try:
+        synced = await bot.tree.sync()
+        print(f"Commands synced successfully: {len(synced)} commands")
+    except Exception as e:
+        print(f"Error syncing commands: {e}")
+
 
 # Botを起動
 if DISCORD_TOKEN:
