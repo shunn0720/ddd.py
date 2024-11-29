@@ -128,10 +128,10 @@ class MangaSelectorView(discord.ui.View):
         else:
             await interaction.response.send_message("条件に合う投稿が見つかりませんでした。", ephemeral=True)
 
-@bot.command()
-async def panel(ctx):
+@bot.tree.command(name="panel", description="エロ漫画ルーレットパネルを表示します")
+async def panel(interaction: discord.Interaction):
     """
-    パネルを表示するコマンド。
+    パネルを表示するスラッシュコマンド。
     """
     embed = discord.Embed(
         title="🎯ｴﾛ漫画ﾙｰﾚｯﾄ",
@@ -146,7 +146,17 @@ async def panel(ctx):
         color=discord.Color.magenta()
     )
     view = MangaSelectorView()
-    await ctx.send(embed=embed, view=view)
+    await interaction.response.send_message(embed=embed, view=view)
+
+@bot.event
+async def on_ready():
+    print(f"Bot logged in as {bot.user} (ID: {bot.user.id})")
+    print("------")
+    try:
+        synced = await bot.tree.sync()  # 明示的にコマンド同期
+        print(f"Commands synced successfully: {len(synced)} commands")
+    except Exception as e:
+        print(f"Error syncing commands: {e}")
 
 # Botを起動
 if DISCORD_TOKEN:
