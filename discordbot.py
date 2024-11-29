@@ -15,10 +15,7 @@ DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 # フォーラムやスレッドのID（必要に応じて設定）
 FORUM_CHANNEL_ID = 1288321432828248124
 THREAD_ID = 1288407362318893109
-READ_LATER_REACTION_ID = 1307321645480022046
-FAVORITE_REACTION_ID = 1307735348184354846
-RANDOM_EXCLUDE_REACTION_ID = 1304763661172346973
-READ_LATER_INCLUDE_REACTION_ID = 1306461538659340308
+REACTION_ID = 1304759949309509672
 
 # メッセージキャッシュを保持する辞書
 message_cache = {}
@@ -43,13 +40,16 @@ async def get_cached_messages(thread_id):
         await update_message_cache(thread_id)
     return message_cache.get(thread_id, [])
 
-def has_reaction(message, reaction_id):
+def has_reaction_from_user(message, reaction_id, user_id):
     """
-    指定されたリアクションがメッセージにあるか確認。
+    指定されたユーザーが指定されたリアクションを押しているか確認。
     """
-    return any(
-        reaction.emoji.id == reaction_id for reaction in message.reactions if hasattr(reaction.emoji, 'id')
-    )
+    for reaction in message.reactions:
+        if hasattr(reaction.emoji, 'id') and reaction.emoji.id == reaction_id:
+            users = [user async for user in reaction.users()]
+            if any(user.id == user_id for user in users):
+                return True
+    return False
 
 async def select_random_message(thread_id, user_id, filter_func=None):
     """
@@ -66,25 +66,16 @@ class MangaSelectorView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="ランダム(通常)", style=discord.ButtonStyle.primary)
-    async def recommend_manga(self, interaction: discord.Interaction, button: discord.ui.Button):
-        random_message = await select_random_message(THREAD_ID, interaction.user.id)
-        if random_message:
-            await interaction.response.send_message(
-                f"{interaction.user.mention} さんには、{random_message.author.display_name} さんが投稿したこの本がおすすめだよ！\nhttps://discord.com/channels/{random_message.guild.id}/{random_message.channel.id}/{random_message.id}"
-            )
-        else:
-            await interaction.response.send_message("おすすめの漫画が見つかりませんでした。", ephemeral=True)
-
     @discord.ui.button(label="あとで読む(通常)", style=discord.ButtonStyle.primary)
     async def later_read(self, interaction: discord.Interaction, button: discord.ui.Button):
         random_message = await select_random_message(
             THREAD_ID, interaction.user.id,
-            filter_func=lambda msg: has_reaction(msg, READ_LATER_REACTION_ID)
+            filter_func=lambda msg: has_reaction_from_user(msg, REACTION_ID, interaction.user.id)
         )
         if random_message:
             await interaction.response.send_message(
-                f"{interaction.user.mention} さんには、{random_message.author.display_name} さんが投稿したこの本がおすすめだよ！\nhttps://discord.com/channels/{random_message.guild.id}/{random_message.channel.id}/{random_message.id}"
+                f"{interaction.user.mention} さんには、{random_message.author.display_name} さんが投稿したこの本がおすすめだよ！\n"
+                f"https://discord.com/channels/{random_message.guild.id}/{random_message.channel.id}/{random_message.id}"
             )
         else:
             await interaction.response.send_message("条件に合う投稿が見つかりませんでした。", ephemeral=True)
@@ -93,11 +84,12 @@ class MangaSelectorView(discord.ui.View):
     async def favorite(self, interaction: discord.Interaction, button: discord.ui.Button):
         random_message = await select_random_message(
             THREAD_ID, interaction.user.id,
-            filter_func=lambda msg: has_reaction(msg, FAVORITE_REACTION_ID)
+            filter_func=lambda msg: has_reaction_from_user(msg, REACTION_ID, interaction.user.id)
         )
         if random_message:
             await interaction.response.send_message(
-                f"{interaction.user.mention} さんには、{random_message.author.display_name} さんが投稿したこの本がおすすめだよ！\nhttps://discord.com/channels/{random_message.guild.id}/{random_message.channel.id}/{random_message.id}"
+                f"{interaction.user.mention} さんには、{random_message.author.display_name} さんが投稿したこの本がおすすめだよ！\n"
+                f"https://discord.com/channels/{random_message.guild.id}/{random_message.channel.id}/{random_message.id}"
             )
         else:
             await interaction.response.send_message("条件に合う投稿が見つかりませんでした。", ephemeral=True)
@@ -106,11 +98,12 @@ class MangaSelectorView(discord.ui.View):
     async def random_exclude(self, interaction: discord.Interaction, button: discord.ui.Button):
         random_message = await select_random_message(
             THREAD_ID, interaction.user.id,
-            filter_func=lambda msg: not has_reaction(msg, RANDOM_EXCLUDE_REACTION_ID)
+            filter_func=lambda msg: not has_reaction_from_user(msg, REACTION_ID, interaction.user.id)
         )
         if random_message:
             await interaction.response.send_message(
-                f"{interaction.user.mention} さんには、{random_message.author.display_name} さんが投稿したこの本がおすすめだよ！\nhttps://discord.com/channels/{random_message.guild.id}/{random_message.channel.id}/{random_message.id}"
+                f"{interaction.user.mention} さんには、{random_message.author.display_name} さんが投稿したこの本がおすすめだよ！\n"
+                f"https://discord.com/channels/{random_message.guild.id}/{random_message.channel.id}/{random_message.id}"
             )
         else:
             await interaction.response.send_message("条件に合う投稿が見つかりませんでした。", ephemeral=True)
@@ -119,44 +112,35 @@ class MangaSelectorView(discord.ui.View):
     async def read_later_exclude(self, interaction: discord.Interaction, button: discord.ui.Button):
         random_message = await select_random_message(
             THREAD_ID, interaction.user.id,
-            filter_func=lambda msg: not has_reaction(msg, RANDOM_EXCLUDE_REACTION_ID) and has_reaction(msg, READ_LATER_INCLUDE_REACTION_ID)
+            filter_func=lambda msg: not has_reaction_from_user(msg, REACTION_ID, interaction.user.id) and has_reaction_from_user(msg, REACTION_ID, interaction.user.id)
         )
         if random_message:
             await interaction.response.send_message(
-                f"{interaction.user.mention} さんには、{random_message.author.display_name} さんが投稿したこの本がおすすめだよ！\nhttps://discord.com/channels/{random_message.guild.id}/{random_message.channel.id}/{random_message.id}"
+                f"{interaction.user.mention} さんには、{random_message.author.display_name} さんが投稿したこの本がおすすめだよ！\n"
+                f"https://discord.com/channels/{random_message.guild.id}/{random_message.channel.id}/{random_message.id}"
             )
         else:
             await interaction.response.send_message("条件に合う投稿が見つかりませんでした。", ephemeral=True)
 
-@bot.tree.command(name="panel", description="エロ漫画ルーレットパネルを表示します")
-async def panel(interaction: discord.Interaction):
+@bot.command()
+async def panel(ctx):
     """
-    パネルを表示するスラッシュコマンド。
+    パネルを表示するコマンド。
     """
     embed = discord.Embed(
         title="🎯ｴﾛ漫画ﾙｰﾚｯﾄ",
         description=(
             "botがｴﾛ漫画を選んでくれるよ！<a:c296:1288305823323263029>\n\n"
-            "🔵：自分の<:b431:1289782471197458495>を除外しない\n"
-            "🔴：自分の<:b431:1289782471197458495>を除外する\n\n"
+            "🔵：自分のリアクションを含む投稿\n"
+            "🔴：自分のリアクションを含まない投稿\n\n"
             "【ランダム】　：全体から選ぶ\n"
-            "【あとで読む】：<:b434:1304690617405669376>を付けた投稿から選ぶ\n"
-            "【お気に入り】：<:b435:1304690627723657267>を付けた投稿から選ぶ"
+            "【あとで読む】：特定のリアクションを付けた投稿から選ぶ\n"
+            "【お気に入り】：お気に入りの投稿を選ぶ"
         ),
         color=discord.Color.magenta()
     )
     view = MangaSelectorView()
-    await interaction.response.send_message(embed=embed, view=view)
-
-@bot.event
-async def on_ready():
-    print(f"Bot logged in as {bot.user} (ID: {bot.user.id})")
-    print("------")
-    try:
-        synced = await bot.tree.sync()  # 明示的にコマンド同期
-        print(f"Commands synced successfully: {len(synced)} commands")
-    except Exception as e:
-        print(f"Error syncing commands: {e}")
+    await ctx.send(embed=embed, view=view)
 
 # Botを起動
 if DISCORD_TOKEN:
