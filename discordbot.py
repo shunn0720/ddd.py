@@ -3,19 +3,59 @@ import discord
 from discord.ext import commands, tasks
 from discord import app_commands
 import random
+import asyncio
+import logging
 import psycopg2
+from psycopg2 import pool
 from psycopg2.extras import DictCursor
+
+# ログ設定
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[
+        logging.FileHandler("bot.log"),
+        logging.StreamHandler()
+    ]
+)
 
 # DATABASE_URL 環境変数を取得
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-# データベースに接続
+# コネクションプールの初期化
+try:
+    db_pool = pool.SimpleConnectionPool(
+        minconn=1, maxconn=10, dsn=DATABASE_URL, sslmode='require'
+    )
+except psycopg2.Error as e:
+    logging.error(f"データベース接続プールの初期化中にエラー: {e}")
+    db_pool = None
+
+# データベース接続を取得
 def get_db_connection():
-    return psycopg2.connect(DATABASE_URL, sslmode='require')
+    try:
+        if db_pool:
+            return db_pool.getconn()
+        else:
+            raise psycopg2.Error("データベース接続プールが初期化されていません。")
+    except psycopg2.Error as e:
+        logging.error(f"データベース接続中にエラー: {e}")
+        return None
+
+# データベース接続をリリース
+def release_db_connection(conn):
+    try:
+        if db_pool and conn:
+            db_pool.putconn(conn)
+    except psycopg2.Error as e:
+        logging.error(f"データベース接続のリリース中にエラー: {e}")
 
 # テーブルの初期化
 def initialize_db():
-    with get_db_connection() as conn:
+    conn = get_db_connection()
+    if not conn:
+        return
+    try:
         with conn.cursor() as cur:
             cur.execute("""
             CREATE TABLE IF NOT EXISTS messages (
@@ -28,6 +68,11 @@ def initialize_db():
             )
             """)
             conn.commit()
+            logging.info("データベースの初期化が完了しました。")
+    except psycopg2.Error as e:
+        logging.error(f"テーブルの初期化中にエラー: {e}")
+    finally:
+        release_db_connection(conn)
 
 initialize_db()
 
@@ -36,7 +81,7 @@ intents = discord.Intents.default()
 intents.messages = True
 intents.message_content = True
 intents.reactions = True
-bot = commands.Bot(command_prefix="!", intents=intent 1 s)
+bot = commands.Bot(command_prefix="!", intents=intents)
 
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 
@@ -46,44 +91,58 @@ READ_LATER_REACTION_ID = 1304759949309509672
 FAVORITE_REACTION_ID = 1304759949309509673
 RANDOM_EXCLUDE_REACTION_ID = 1304759949309509674
 
-# メッセージをデータベースに保存 (バッチインサート)
-def save_messages_to_db(thread_id):
-    forum_channel = bot.get_channel(thread_id)
-    if forum_channel is None:
+# メッセージをデータベースに保存
+async def save_messages_to_db(thread_id):
+    conn = get_db_connection()
+    if not conn:
         return
-    thread = forum_channel.get_thread(thread_id)
-    if thread:
-        messages_to_insert = []
-        async for message in thread.history(limit=None): 
-            messages_to_insert.append((
-                message.id,
-                thread_id,
-                message.author.id,
-                str({reaction.emoji.id: reaction.count for reaction in message.reactions if hasattr(reaction.emoji, 'id')}),
-                message.content
-            ))
+    try:
+        thread = bot.get_channel(THREAD_ID)
+        if thread is None:
+            logging.warning("スレッドが見つかりませんでした。")
+            return
 
-        try:
-            with get_db_connection() as conn:
-                with conn.cursor() as cur:
-                    cur.executemany("""
-                        INSERT INTO messages (message_id, thread_id, author_id, reactions, content)
-                        VALUES (%s, %s, %s, %s, %s)
-                        ON CONFLICT (message_id) DO NOTHING
-                        """, messages_to_insert)
-                    conn.commit()
-        except psycopg2.Error as e:
-            print(f"Error saving messages to database: {e}")
+        async for message in thread.history(limit=100):
+            reactions_dict = {
+                str(reaction.emoji.id): reaction.count
+                for reaction in message.reactions if hasattr(reaction.emoji, 'id')
+            }
+            with conn.cursor() as cur:
+                cur.execute("""
+                INSERT INTO messages (message_id, thread_id, author_id, reactions, content)
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (message_id) DO NOTHING
+                """, (
+                    message.id,
+                    thread_id,
+                    message.author.id,
+                    str(reactions_dict),
+                    message.content
+                ))
+                conn.commit()
+        logging.info("メッセージの保存が完了しました。")
+    except psycopg2.Error as e:
+        logging.error(f"メッセージ保存中にエラー: {e}")
+    finally:
+        release_db_connection(conn)
 
 # メッセージをランダムに取得
 def get_random_message(thread_id, filter_func=None):
-    with get_db_connection() as conn:
+    conn = get_db_connection()
+    if not conn:
+        return None
+    try:
         with conn.cursor(cursor_factory=DictCursor) as cur:
             cur.execute("SELECT * FROM messages WHERE thread_id = %s", (thread_id,))
             messages = cur.fetchall()
             if filter_func:
                 messages = [msg for msg in messages if filter_func(msg)]
             return random.choice(messages) if messages else None
+    except psycopg2.Error as e:
+        logging.error(f"メッセージ取得中にエラー: {e}")
+        return None
+    finally:
+        release_db_connection(conn)
 
 # ボタンのUI定義
 class MangaSelectorView(discord.ui.View):
@@ -94,7 +153,7 @@ class MangaSelectorView(discord.ui.View):
     async def later_read(self, interaction: discord.Interaction, button: discord.ui.Button):
         def filter_func(msg):
             reactions = msg['reactions']
-            return str(READ_LATER_REACTION_ID) in reactions and int(reactions[str(READ_LATER_REACTION_ID)]) > 0
+            return str(READ_LATER_REACTION_ID) in reactions and reactions[str(READ_LATER_REACTION_ID)] > 0
 
         random_message = get_random_message(THREAD_ID, filter_func)
         if random_message:
@@ -108,7 +167,7 @@ class MangaSelectorView(discord.ui.View):
     async def favorite(self, interaction: discord.Interaction, button: discord.ui.Button):
         def filter_func(msg):
             reactions = msg['reactions']
-            return str(FAVORITE_REACTION_ID) in reactions and int(reactions[str(FAVORITE_REACTION_ID)]) > 0
+            return str(FAVORITE_REACTION_ID) in reactions and reactions[str(FAVORITE_REACTION_ID)] > 0
 
         random_message = get_random_message(THREAD_ID, filter_func)
         if random_message:
@@ -125,65 +184,88 @@ class MangaSelectorView(discord.ui.View):
             return str(RANDOM_EXCLUDE_REACTION_ID) not in reactions
 
         random_message = get_random_message(THREAD_ID, filter_func)
-        try:
-            await interaction.response.defer(ephemeral=True)  # Acknowledge interaction
-
-            if random_message:
-                await interaction.followup.send( 
-                    f"<@{random_message['author_id']}> さんが投稿したこの本がおすすめだよ！\nhttps://discord.com/channels/{interaction.guild.id}/{THREAD_ID}/{random_message['message_id']}"
-                )
-            else:
-                await interaction.followup.send("条件に合う投稿が見つかりませんでした。")
-
-        except Exception as e:
-            print(f"Error in random_exclude: {e}")
-            await interaction.followup.send("エラーが発生しました。", ephemeral=True)
-
+        if random_message:
+            await interaction.response.send_message(
+                f"{interaction.user.mention} さんには、<@{random_message['author_id']}> さんが投稿したこの本がおすすめだよ！\nhttps://discord.com/channels/{interaction.guild.id}/{THREAD_ID}/{random_message['message_id']}"
+            )
+        else:
+            await interaction.response.send_message("条件に合う投稿が見つかりませんでした。", ephemeral=True)
 
 # コマンド定義
 @bot.tree.command(name="panel")
 async def panel(interaction: discord.Interaction):
-    """
-    パネルを表示するコマンド。
-    """
     embed = discord.Embed(
         title="🎯ｴﾛ漫画ﾙｰﾚｯﾄ",
         description=(
             "botがｴﾛ漫画を選んでくれるよ！\n\n"
-            "【ランダム】：リアクションが付いていない投稿から選ぶ\n"
+            "【ランダム】：全体から選ぶ\n"
             "【あとで読む】：特定のリアクションが付いた投稿から選ぶ\n"
-            "【お気に入り】：お気に入りのリアクションが付いた投稿から選ぶ"
+            "【お気に入り】：お気に入りの投稿から選ぶ"
         ),
         color=discord.Color.magenta()
     )
     view = MangaSelectorView()
     await interaction.response.send_message(embed=embed, view=view)
 
-# Bot起動時にメッセージキャッシュをデータベースに保存
+# メッセージ削除時の処理
+@bot.event
+async def on_raw_message_delete(payload):
+    conn = get_db_connection()
+    if not conn:
+        return
+    try:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM messages WHERE message_id = %s", (payload.message_id,))
+            conn.commit()
+            logging.info(f"メッセージ {payload.message_id} が削除されました。")
+    except psycopg2.Error as e:
+        logging.error(f"メッセージ削除中にエラー: {e}")
+    finally:
+        release_db_connection(conn)
+
+# リアクションの定期的な更新
+@tasks.loop(minutes=5)
+async def update_reactions():
+    conn = get_db_connection()
+    if not conn:
+        return
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT message_id FROM messages")
+            message_ids = [row[0] for row in cur.fetchall()]
+
+            thread = bot.get_channel(THREAD_ID)
+            for message_id in message_ids:
+                try:
+                    message = await thread.fetch_message(message_id)
+                    reactions_dict = {
+                        str(reaction.emoji.id): reaction.count
+                        for reaction in message.reactions if hasattr(reaction.emoji, 'id')
+                    }
+                    with conn.cursor() as cur:
+                        cur.execute("UPDATE messages SET reactions = %s WHERE message_id = %s",
+                                    (str(reactions_dict), message_id))
+                        conn.commit()
+
+                    await asyncio.sleep(1)  # レート制限対策を強化
+                except discord.NotFound:
+                    logging.warning(f"Message not found: {message_id}")
+                except Exception as e:
+                    logging.error(f"Error updating reactions for message {message_id}: {e}")
+    except psycopg2.Error as e:
+        logging.error(f"Error updating reactions: {e}")
+    finally:
+        release_db_connection(conn)
+
+# Bot起動時の処理
 @bot.event
 async def on_ready():
     await save_messages_to_db(THREAD_ID)
-    print(f"Botが起動しました！ {bot.user}")
-
-# リアクションの定期的な更新 (5分ごと)
-@tasks.loop(minutes=5)
-async def update_reactions():
-    try:
-        with get_db_connection() as conn:
-            with conn.cursor() as cur:
-                # データベースからメッセージを取得し、リアクション数を更新するロジック
-                # ... (ここでは省略)
-    except psycopg2.Error as e:
-        print(f"Error updating reactions: {e}")
-
-@update_reactions.before_loop
-async def before_update_reactions():
-    await bot.wait_until_ready()
-
-update_reactions.start()
+    update_reactions.start()
+    logging.info(f"Botが起動しました！ {bot.user}")
 
 # Botを起動
 if DISCORD_TOKEN:
     bot.run(DISCORD_TOKEN)
 else:
-    print("DISCORD_TOKENが設定されていません。")
+    logging.error("DISCORD_TOKENが設定されていません。")
