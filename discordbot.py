@@ -144,19 +144,6 @@ class MangaSelectorView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="ランダム", style=discord.ButtonStyle.primary)
-    async def random_normal(self, interaction: discord.Interaction, button: discord.ui.Button):
-        random_message = get_random_message(THREAD_ID, lambda msg: msg['author_id'] != interaction.user.id)
-        await self.send_random_message(interaction, random_message)
-
-    @discord.ui.button(label="あとで読む", style=discord.ButtonStyle.primary)
-    async def read_later_normal(self, interaction: discord.Interaction, button: discord.ui.Button):
-        random_message = get_random_message(
-            THREAD_ID,
-            lambda msg: msg['author_id'] != interaction.user.id and str(READ_LATER_REACTION_ID) in msg['reactions']
-        )
-        await self.send_random_message(interaction, random_message)
-
     @discord.ui.button(label="お気に入り", style=discord.ButtonStyle.primary)
     async def favorite(self, interaction: discord.Interaction, button: discord.ui.Button):
         random_message = get_random_message(
@@ -165,21 +152,11 @@ class MangaSelectorView(discord.ui.View):
         )
         await self.send_random_message(interaction, random_message)
 
-    @discord.ui.button(label="ランダム除外", style=discord.ButtonStyle.danger)
-    async def random_exclude(self, interaction: discord.Interaction, button: discord.ui.Button):
+    @discord.ui.button(label="あとで読む", style=discord.ButtonStyle.danger)
+    async def read_later(self, interaction: discord.Interaction, button: discord.ui.Button):
         random_message = get_random_message(
             THREAD_ID,
-            lambda msg: msg['author_id'] != interaction.user.id and str(RANDOM_EXCLUDE_REACTION_ID) not in msg['reactions']
-        )
-        await self.send_random_message(interaction, random_message)
-
-    @discord.ui.button(label="あとで読む, style=discord.ButtonStyle.danger)
-    async def read_later_exclude(self, interaction: discord.Interaction, button: discord.ui.Button):
-        random_message = get_random_message(
-            THREAD_ID,
-            lambda msg: msg['author_id'] != interaction.user.id
-            and str(READ_LATER_REACTION_ID) in msg['reactions']
-            and str(RANDOM_EXCLUDE_REACTION_ID) not in msg['reactions']
+            lambda msg: msg['author_id'] != interaction.user.id and str(READ_LATER_REACTION_ID) in msg['reactions']
         )
         await self.send_random_message(interaction, random_message)
 
@@ -191,7 +168,7 @@ class MangaSelectorView(discord.ui.View):
             )
         else:
             await interaction.response.send_message("条件に合う投稿が見つかりませんでした。", ephemeral=True)
-
+            
 # コマンド定義
 @bot.tree.command(name="panel")
 async def panel(interaction: discord.Interaction):
