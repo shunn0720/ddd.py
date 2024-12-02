@@ -157,7 +157,7 @@ class MangaSelectorView(discord.ui.View):
         )
         await self.send_random_message(interaction, random_message)
 
-    @discord.ui.button(label="お気に入り, style=discord.ButtonStyle.primary)
+    @discord.ui.button(label="お気に入り", style=discord.ButtonStyle.primary)
     async def favorite(self, interaction: discord.Interaction, button: discord.ui.Button):
         random_message = get_random_message(
             THREAD_ID,
