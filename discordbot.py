@@ -89,98 +89,149 @@ DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 THREAD_ID = 1288407362318893109
 READ_LATER_REACTION_ID = 1304690617405669376
 FAVORITE_REACTION_ID = 1304690627723657267
-RANDOM_EXCLUDE_REACTION_ID = 1310824310348316753
+RANDOM_EXCLUDE_REACTION_ID = 1304763661172346973
+
+# 非同期でリアクションの辞書を取得する関数
+async def get_reactions_dict(message):
+    reactions = {}
+    for reaction in message.reactions:
+        if hasattr(reaction.emoji, 'id'):  # カスタム絵文字の場合
+            users = [user.id async for user in reaction.users()]
+            reactions[str(reaction.emoji.id)] = users
+    return reactions
 
 # メッセージをデータベースに保存
-async def save_all_messages_to_db():
+async def save_message_to_db(message):
     conn = get_db_connection()
     if not conn:
         return
     try:
-        channel = bot.get_channel(THREAD_ID)
-        thread = channel
-        async for message in thread.history(limit=None):
-            reactions_dict = {
-                str(reaction.emoji.id): [user.id async for user in reaction.users()]
-                for reaction in message.reactions if hasattr(reaction.emoji, 'id')
-            }
-            with conn.cursor() as cur:
-                cur.execute("""
-                INSERT INTO messages (message_id, thread_id, author_id, reactions, content)
-                VALUES (%s, %s, %s, %s, %s)
-                ON CONFLICT (message_id) DO UPDATE SET reactions = EXCLUDED.reactions
-                """, (
-                    message.id,
-                    THREAD_ID,
-                    message.author.id,
-                    str(reactions_dict),
-                    message.content
-                ))
-                conn.commit()
+        reactions_dict = await get_reactions_dict(message)
+        with conn.cursor() as cur:
+            cur.execute("""
+            INSERT INTO messages (message_id, thread_id, author_id, reactions, content)
+            VALUES (%s, %s, %s, %s, %s)
+            ON CONFLICT (message_id) DO UPDATE SET reactions = EXCLUDED.reactions
+            """, (
+                message.id,
+                THREAD_ID,
+                message.author.id,
+                str(reactions_dict),
+                message.content
+            ))
+            conn.commit()
     except psycopg2.Error as e:
         logging.error(f"メッセージ保存中にエラー: {e}")
     finally:
         release_db_connection(conn)
 
-# タスクで定期的にメッセージ保存
-@tasks.loop(minutes=10)
-async def periodic_save_messages():
-    await save_all_messages_to_db()
+# メッセージをランダムに取得
+def get_random_message(thread_id, filter_func=None):
+    conn = get_db_connection()
+    if not conn:
+        return None
+    try:
+        with conn.cursor(cursor_factory=DictCursor) as cur:
+            cur.execute("SELECT * FROM messages WHERE thread_id = %s", (thread_id,))
+            messages = cur.fetchall()
+            if filter_func:
+                messages = [msg for msg in messages if filter_func(msg)]
+            if not messages:
+                raise ValueError("指定された条件に合うメッセージがありませんでした。")
+            return random.choice(messages)
+    except psycopg2.Error as e:
+        logging.error(f"データベース操作中にエラー: {e}")
+        raise RuntimeError(f"データベースエラーが発生しました: {e}")
+    except ValueError as e:
+        logging.error(str(e))
+        raise
+    finally:
+        release_db_connection(conn)
 
 # ボタンのUI定義
 class MangaSelectorView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="ランダム", style=discord.ButtonStyle.primary, row=0)
-    async def random_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.handle_selection(interaction, lambda msg: True)
-
-    @discord.ui.button(label="あとで読む", style=discord.ButtonStyle.primary, row=0)
-    async def read_later_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.handle_selection(interaction, lambda msg: str(READ_LATER_REACTION_ID) in msg['reactions'])
-
-    @discord.ui.button(label="お気に入り", style=discord.ButtonStyle.primary, row=0)
-    async def favorite_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.handle_selection(interaction, lambda msg: str(FAVORITE_REACTION_ID) in msg['reactions'])
-
-    @discord.ui.button(label="ランダム除外", style=discord.ButtonStyle.danger, row=1)
-    async def random_exclude_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.handle_selection(interaction, lambda msg: str(RANDOM_EXCLUDE_REACTION_ID) not in msg['reactions'])
-
-    @discord.ui.button(label="条件付き読む", style=discord.ButtonStyle.danger, row=1)
-    async def conditional_read_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.handle_selection(
-            interaction,
-            lambda msg: str(READ_LATER_REACTION_ID) in msg['reactions'] and
-                        str(RANDOM_EXCLUDE_REACTION_ID) not in msg['reactions']
-        )
-
-    async def handle_selection(self, interaction, filter_func):
+    @discord.ui.button(label="ランダム", style=discord.ButtonStyle.primary)
+    async def random_normal(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
-            random_message = get_random_message(THREAD_ID, filter_func)
-            await interaction.response.edit_message(
-                content=(
-                    f"{interaction.user.mention} さんには、<@{random_message['author_id']}> さんが投稿したこの本がおすすめだよ！\n"
-                    f"https://discord.com/channels/{interaction.guild.id}/{THREAD_ID}/{random_message['message_id']}"
-                ),
-                embed=None
+            random_message = get_random_message(
+                THREAD_ID,
+                lambda msg: msg['author_id'] != interaction.user.id  # 自分の投稿を除外
             )
-        except ValueError:
-            await interaction.response.edit_message(content="条件に合う投稿が見つかりませんでした。", embed=None)
-        except RuntimeError as e:
-            await interaction.response.edit_message(content="データベースエラーが発生しました。", embed=None)
+            await self.send_random_message(interaction, random_message)
+        except Exception as e:
+            await interaction.response.send_message(str(e), ephemeral=True)
 
-# コマンド定義
+    @discord.ui.button(label="あとで読む", style=discord.ButtonStyle.primary)
+    async def read_later(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try:
+            random_message = get_random_message(
+                THREAD_ID,
+                lambda msg: str(READ_LATER_REACTION_ID) in msg['reactions']
+                and msg['author_id'] != interaction.user.id
+            )
+            await self.send_random_message(interaction, random_message)
+        except Exception as e:
+            await interaction.response.send_message(str(e), ephemeral=True)
+
+    @discord.ui.button(label="お気に入り", style=discord.ButtonStyle.primary)
+    async def favorite(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try:
+            random_message = get_random_message(
+                THREAD_ID,
+                lambda msg: str(FAVORITE_REACTION_ID) in msg['reactions']
+                and msg['author_id'] != interaction.user.id
+            )
+            await self.send_random_message(interaction, random_message)
+        except Exception as e:
+            await interaction.response.send_message(str(e), ephemeral=True)
+
+    @discord.ui.button(label="ランダム除外", style=discord.ButtonStyle.danger)
+    async def random_exclude(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try:
+            random_message = get_random_message(
+                THREAD_ID,
+                lambda msg: str(RANDOM_EXCLUDE_REACTION_ID) not in msg['reactions']
+                and msg['author_id'] != interaction.user.id
+            )
+            await self.send_random_message(interaction, random_message)
+        except Exception as e:
+            await interaction.response.send_message(str(e), ephemeral=True)
+
+    @discord.ui.button(label="条件付き読む", style=discord.ButtonStyle.danger)
+    async def conditional_read(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try:
+            random_message = get_random_message(
+                THREAD_ID,
+                lambda msg: str(FAVORITE_REACTION_ID) in msg['reactions']
+                and str(RANDOM_EXCLUDE_REACTION_ID) not in msg['reactions']
+                and msg['author_id'] != interaction.user.id
+            )
+            await self.send_random_message(interaction, random_message)
+        except Exception as e:
+            await interaction.response.send_message(str(e), ephemeral=True)
+
+    async def send_random_message(self, interaction, random_message):
+        if random_message:
+            await interaction.response.send_message(
+                f"{interaction.user.mention} さんには、<@{random_message['author_id']}> さんが投稿したこの本がおすすめだよ！\n"
+                f"https://discord.com/channels/{interaction.guild.id}/{THREAD_ID}/{random_message['message_id']}"
+            )
+        else:
+            await interaction.response.send_message("条件に合う投稿が見つかりませんでした。", ephemeral=True)
+
+# /panel コマンド
 @bot.tree.command(name="panel")
 async def panel(interaction: discord.Interaction):
     embed = discord.Embed(
-        title="🎯ｴﾛ漫画ﾙｰﾚｯﾄ",
+        title="🎯エロ漫画ルーレット",
         description=(
-            "botがｴﾛ漫画を選んでくれるよ！<a:c296:1288305823323263029>\n\n"
+            "botがエロ漫画を選んでくれるよ！<a:c296:1288305823323263029>\n\n"
             "🔵：自分の<:b431:1289782471197458495>を除外しない\n"
             "🔴：自分の<:b431:1289782471197458495>を除外する\n\n"
-            "【ランダム】　：全体から選ぶ\n"
+            "【ランダム】：全体から選ぶ\n"
             "【あとで読む】：<:b434:1304690617405669376>を付けた投稿から選ぶ\n"
             "【お気に入り】：<:b435:1304690627723657267>を付けた投稿から選ぶ"
         ),
@@ -190,13 +241,32 @@ async def panel(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed, view=view)
 
 # Bot起動時の処理
+@tasks.loop(minutes=60)
+async def save_all_messages_to_db_task():
+    await save_all_messages_to_db()
+
 @bot.event
 async def on_ready():
-    periodic_save_messages.start()
+    save_all_messages_to_db_task.start()
     logging.info(f"Botが起動しました！ {bot.user}")
+
+@bot.event
+async def on_shutdown():
+    if save_all_messages_to_db_task.is_running():
+        save_all_messages_to_db_task.cancel()
+        logging.info("バックグラウンドタスクを停止しました。")
+    if db_pool:
+        db_pool.closeall()
+        logging.info("データベース接続プールをクローズしました。")
 
 # Botを起動
 if DISCORD_TOKEN:
-    bot.run(DISCORD_TOKEN)
+    try:
+        bot.run(DISCORD_TOKEN)
+    except Exception as e:
+        logging.error(f"Bot起動中にエラーが発生しました: {e}")
+        if db_pool:
+            db_pool.closeall()
+            logging.info("データベース接続プールをクローズしました。")
 else:
     logging.error("DISCORD_TOKENが設定されていません。")
