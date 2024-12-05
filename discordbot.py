@@ -8,6 +8,9 @@ import logging
 import psycopg2
 from psycopg2 import pool
 from psycopg2.extras import DictCursor
+from dotenv import load_dotenv
+# 環境変数の読み込み
+load_dotenv()
 
 # ログ設定
 logging.basicConfig(
@@ -149,7 +152,8 @@ def get_random_message(thread_id, filter_func=None):
         release_db_connection(conn)
 
 # ボタンのUI定義
-class MangaSelectorView(discord.ui.View):
+class MangaSelectorViewBlue(discord.ui.View):
+    """青ボタン用のView"""
     def __init__(self):
         super().__init__(timeout=None)
 
@@ -158,7 +162,7 @@ class MangaSelectorView(discord.ui.View):
         try:
             random_message = get_random_message(
                 THREAD_ID,
-                lambda msg: msg['author_id'] != interaction.user.id  # 自分の投稿を除外
+                lambda msg: msg['author_id'] != interaction.user.id
             )
             await self.send_random_message(interaction, random_message)
         except Exception as e:
@@ -187,6 +191,21 @@ class MangaSelectorView(discord.ui.View):
             await self.send_random_message(interaction, random_message)
         except Exception as e:
             await interaction.response.send_message(str(e), ephemeral=True)
+
+    async def send_random_message(self, interaction, random_message):
+        if random_message:
+            await interaction.response.send_message(
+                f"{interaction.user.mention} さんには、<@{random_message['author_id']}> さんが投稿したこの本がおすすめだよ！\n"
+                f"https://discord.com/channels/{interaction.guild.id}/{THREAD_ID}/{random_message['message_id']}"
+            )
+        else:
+            await interaction.response.send_message("条件に合う投稿が見つかりませんでした。", ephemeral=True)
+
+
+class MangaSelectorViewRed(discord.ui.View):
+    """赤ボタン用のView"""
+    def __init__(self):
+        super().__init__(timeout=None)
 
     @discord.ui.button(label="ランダム除外", style=discord.ButtonStyle.danger)
     async def random_exclude(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -222,6 +241,7 @@ class MangaSelectorView(discord.ui.View):
         else:
             await interaction.response.send_message("条件に合う投稿が見つかりませんでした。", ephemeral=True)
 
+
 # /panel コマンド
 @bot.tree.command(name="panel")
 async def panel(interaction: discord.Interaction):
@@ -237,8 +257,11 @@ async def panel(interaction: discord.Interaction):
         ),
         color=discord.Color.magenta()
     )
-    view = MangaSelectorView()
-    await interaction.response.send_message(embed=embed, view=view)
+    view_blue = MangaSelectorViewBlue()
+    view_red = MangaSelectorViewRed()
+    await interaction.response.send_message(embed=embed, view=view_blue)
+    await interaction.channel.send(view=view_red)  # 赤ボタンを下に表示
+
 
 # Bot起動時の処理
 @tasks.loop(minutes=60)
