@@ -12,7 +12,8 @@ from dotenv import load_dotenv
 import json
 
 # カスタム例外定義
-class DatabaseOperationError(Exception):
+class DatabaseQueryError(Exception):
+    """データベースクエリ実行時のエラーを表す例外クラス"""
     pass
 
 # 環境変数の読み込み
@@ -141,7 +142,6 @@ async def save_message_to_db(message):
 
 # データベースのリアクション情報を更新
 async def update_reactions_in_db(message_id):
-    # メッセージを取得してDB更新
     channel = bot.get_channel(THREAD_ID)
     if channel is None:
         logging.error(f"チャンネル {THREAD_ID} が見つかりませんでした。")
@@ -161,7 +161,6 @@ async def update_reactions_in_db(message_id):
     # メッセージのリアクション情報を更新
     await save_message_to_db(message)
 
-# ユーザーが特定のリアクションを付けているか確認
 def user_reacted(msg, reaction_id, user_id):
     reaction_data = msg['reactions']
     # reactionsがNoneの場合は空dictとして扱う
@@ -174,7 +173,6 @@ def user_reacted(msg, reaction_id, user_id):
     users = reaction_data.get(str(reaction_id), [])
     return user_id in users
 
-# メッセージをランダムに取得
 def get_random_message(thread_id, filter_func=None):
     conn = get_db_connection()
     if not conn:
@@ -191,16 +189,15 @@ def get_random_message(thread_id, filter_func=None):
                     msg['reactions'] = json.loads(msg['reactions']) or {}
 
             if filter_func:
-                messages = [msg for msg in messages if filter_func(msg)]
+                messages = [m for m in messages if filter_func(m)]
             if not messages:
+                logging.warning("指定された条件に合うメッセージがありませんでした。")
                 raise ValueError("指定された条件に合うメッセージがありませんでした。")
             return random.choice(messages)
     except psycopg2.Error as e:
         logging.error(f"データベース操作中にエラー: {e}")
-        raise DatabaseOperationError(f"データベースエラーが発生しました: {e}")
+        raise DatabaseQueryError(f"データベースエラーが発生しました: {e}")
     except ValueError as e:
-        # 見つからなかった場合はInfoレベルで出力
-        logging.info(str(e))
         raise
     finally:
         release_db_connection(conn)
@@ -210,7 +207,6 @@ class CombinedView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    # 上段（青ボタン）
     @discord.ui.button(label="ランダム", style=discord.ButtonStyle.primary, row=0)
     async def random_normal(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
@@ -266,7 +262,6 @@ class CombinedView(discord.ui.View):
         except Exception as e:
             await interaction.response.send_message(str(e), ephemeral=True)
 
-    # 下段（赤ボタン）
     @discord.ui.button(label="ランダム", style=discord.ButtonStyle.danger, row=1)
     async def random_exclude(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
@@ -314,7 +309,7 @@ class CombinedView(discord.ui.View):
                 f"{interaction.user.mention} さんには、<@{random_message['author_id']}> さんが投稿したこの本がおすすめだよ！\n"
                 f"https://discord.com/channels/{interaction.guild.id}/{THREAD_ID}/{random_message['message_id']}"
             )
-            # ボタンを押す度に再度パネルを下部へ送信
+            # 再度パネルを下部へ送信
             await self.repost_panel(interaction)
         else:
             await interaction.response.send_message("条件に合う投稿が見つかりませんでした。", ephemeral=True)
@@ -322,8 +317,8 @@ class CombinedView(discord.ui.View):
     async def repost_panel(self, interaction):
         embed = create_panel_embed()
         new_view = CombinedView()
-        await interaction.followup.send(embed=embed, content=create_table_layout(), view=new_view)
-
+        # create_table_layout()呼び出し削除
+        await interaction.followup.send(embed=embed, view=new_view)
 
 def create_panel_embed():
     embed = discord.Embed(
@@ -335,35 +330,23 @@ def create_panel_embed():
             "【あとで読む】：<:b434:1304690617405669376>を付けた自分用の投稿から\n"
             "【お気に入り】：<:b435:1304690627723657267>を付けた自分用の投稿から\n\n"
             "■ 赤ボタン（下段）\n"
-            "【ランダム除外】：<:b436:1304763661172346973>を付けた自分用の投稿は除外\n"
-            "【条件付き読む】：あとで読む付き＆ランダム除外なしの自分用投稿から"
+            "【ランダム】：<:b436:1304763661172346973>を付けた自分用の投稿は除外\n"
+            "【あとで読む】：あとで読む付き＆ランダム除外なしの自分用投稿から"
         ),
         color=discord.Color.magenta()
     )
     return embed
-
-def create_table_layout():
-    return (
-        "```\n"
-        "+------------------------------------------------+\n"
-        "|               【ランダム】【あとで読む】【お気に入り】             |\n"
-        "+------------------------------------------------+\n"
-        "|               【ランダム除外】【条件付き読む】                 |\n"
-        "+------------------------------------------------+\n"
-        "```"
-    )
 
 # /panel コマンド
 @bot.tree.command(name="panel")
 async def panel(interaction: discord.Interaction):
     embed = create_panel_embed()
     view = CombinedView()
-    await interaction.response.send_message(embed=embed, content=create_table_layout(), view=view)
+    # create_table_layout()呼び出し削除
+    await interaction.response.send_message(embed=embed, view=view)
 
 @bot.event
 async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
-    # リアクションが削除されたとき
-    # メッセージIDを元にDB内のリアクション情報を更新する
     await update_reactions_in_db(payload.message_id)
 
 @tasks.loop(minutes=60)
@@ -371,7 +354,6 @@ async def save_all_messages_to_db_task():
     await save_all_messages_to_db()
 
 async def save_all_messages_to_db():
-    # 必要に応じて全メッセージ保存処理を実装
     pass
 
 @bot.event
@@ -388,7 +370,6 @@ async def on_shutdown():
         db_pool.closeall()
         logging.info("データベース接続プールをクローズしました。")
 
-# Botを起動
 if DISCORD_TOKEN:
     try:
         bot.run(DISCORD_TOKEN)
