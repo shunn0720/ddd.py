@@ -87,9 +87,9 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 
 THREAD_ID = 1288407362318893109
-READ_LATER_REACTION_ID = 1304690617405669376
-FAVORITE_REACTION_ID = 1304690627723657267
-RANDOM_EXCLUDE_REACTION_ID = 1304763661172346973
+READ_LATER_REACTION_ID = 1316997135878717442   # <:b434:1316997135878717442>
+FAVORITE_REACTION_ID = 1316997169949048904     # <:b435:1316997169949048904>
+RANDOM_EXCLUDE_REACTION_ID = 1316997183509102603 # <:b436:1316997183509102603>
 SPECIAL_EXCLUDE_AUTHOR = 695096014482440244
 
 last_chosen_authors = {}
@@ -168,6 +168,7 @@ def get_random_message(thread_id, filter_func=None):
                     msg['reactions'] = {}
                 elif isinstance(msg['reactions'], str):
                     msg['reactions'] = json.loads(msg['reactions']) or {}
+
             if filter_func:
                 messages = [m for m in messages if filter_func(m)]
             if not messages:
@@ -182,6 +183,35 @@ def get_random_message(thread_id, filter_func=None):
 class CombinedView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
+
+    async def get_author_name(self, author_id):
+        user = bot.get_user(author_id)
+        if user is None:
+            try:
+                user = await bot.fetch_user(author_id)
+            except discord.NotFound:
+                user = None
+        return user.name if user else "不明なユーザー"
+
+    async def handle_selection(self, interaction, random_message):
+        try:
+            await interaction.response.defer()
+            if random_message:
+                last_chosen_authors[interaction.user.id] = random_message['author_id']
+                author_name = await self.get_author_name(random_message['author_id'])
+                await interaction.followup.send(
+                    f"{interaction.user.mention} さんには、{author_name} さんが投稿したこの本がおすすめだよ！\n"
+                    f"https://discord.com/channels/{interaction.guild.id}/{THREAD_ID}/{random_message['message_id']}"
+                )
+            else:
+                await interaction.followup.send(
+                    "条件に合う投稿が見つかりませんでした。", ephemeral=True
+                )
+        except Exception as e:
+            logging.error(f"メッセージの取得または応答中にエラーが発生しました: {e}")
+            await interaction.followup.send(
+                "投稿を読み込む際にエラーが発生しました。しばらくしてから再試行してください。", ephemeral=True
+            )
 
     @discord.ui.button(label="ランダム", style=discord.ButtonStyle.primary, row=0)
     async def random_normal(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -213,7 +243,6 @@ class CombinedView(discord.ui.View):
                 if last_chosen_authors.get(interaction.user.id) == msg['author_id']:
                     return False
                 return True
-
             random_message = get_random_message(THREAD_ID, filter_func)
             await self.handle_selection(interaction, random_message)
         except Exception as e:
@@ -232,7 +261,6 @@ class CombinedView(discord.ui.View):
                 if last_chosen_authors.get(interaction.user.id) == msg['author_id']:
                     return False
                 return True
-
             random_message = get_random_message(THREAD_ID, filter_func)
             await self.handle_selection(interaction, random_message)
         except Exception as e:
@@ -251,7 +279,6 @@ class CombinedView(discord.ui.View):
                 if last_chosen_authors.get(interaction.user.id) == msg['author_id']:
                     return False
                 return True
-
             random_message = get_random_message(THREAD_ID, filter_func)
             await self.handle_selection(interaction, random_message)
         except Exception as e:
@@ -278,28 +305,6 @@ class CombinedView(discord.ui.View):
         except Exception as e:
             await interaction.response.send_message(str(e), ephemeral=True)
 
-    async def handle_selection(self, interaction, random_message):
-        if random_message:
-            last_chosen_authors[interaction.user.id] = random_message['author_id']
-            await interaction.response.send_message(
-                f"{interaction.user.mention} さんには、<@{random_message['author_id']}> さんが投稿したこの本がおすすめだよ！\n"
-                f"https://discord.com/channels/{interaction.guild.id}/{THREAD_ID}/{random_message['message_id']}"
-            )
-            # 元のパネルメッセージ(Embed+View)を削除
-            try:
-                await interaction.message.delete()
-            except discord.DiscordException as e:
-                logging.error(f"メッセージ削除に失敗しました: {e}")
-            # 再投稿
-            await self.repost_panel(interaction)
-        else:
-            await interaction.response.send_message("条件に合う投稿が見つかりませんでした。", ephemeral=True)
-
-    async def repost_panel(self, interaction):
-        embed = create_panel_embed()
-        new_view = CombinedView()
-        await interaction.followup.send(embed=embed, view=new_view)
-
 def create_panel_embed():
     embed = discord.Embed(
         description=(
@@ -307,8 +312,8 @@ def create_panel_embed():
             "🔵：自分の<:b431:1289782471197458495>を除外しない\n"
             "🔴：自分の<:b431:1289782471197458495>を除外する\n\n"
             "【ランダム】：全体から選ぶ\n"
-            "【あとで読む】：<:b434:1304690617405669376>を付けた投稿から選ぶ\n"
-            "【お気に入り】：<:b435:1304690627723657267>を付けた投稿から選ぶ"
+            f"【あとで読む】：<:b434:{READ_LATER_REACTION_ID}>を付けた投稿から選ぶ\n"
+            f"【お気に入り】：<:b435:{FAVORITE_REACTION_ID}>を付けた投稿から選ぶ"
         ),
         color=discord.Color.magenta()
     )
