@@ -191,7 +191,8 @@ class CombinedView(discord.ui.View):
                 user = await bot.fetch_user(author_id)
             except discord.NotFound:
                 user = None
-        return user.name if user else "不明なユーザー"
+        # 表示名 (display_name) を優先して使用
+        return user.display_name if user and user.display_name else (user.name if user else "不明なユーザー")
 
     async def handle_selection(self, interaction, random_message):
         try:
@@ -199,6 +200,7 @@ class CombinedView(discord.ui.View):
             if random_message:
                 last_chosen_authors[interaction.user.id] = random_message['author_id']
                 author_name = await self.get_author_name(random_message['author_id'])
+                # 投稿者の表示名をそのまま表示する
                 await interaction.followup.send(
                     f"{interaction.user.mention} さんには、{author_name} さんが投稿したこの本がおすすめだよ！\n"
                     f"https://discord.com/channels/{interaction.guild.id}/{THREAD_ID}/{random_message['message_id']}"
