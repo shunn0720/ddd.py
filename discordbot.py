@@ -11,15 +11,12 @@ from psycopg2.extras import DictCursor
 from dotenv import load_dotenv
 import json
 
-# カスタム例外定義
 class DatabaseQueryError(Exception):
     """データベースクエリ実行時のエラーを表す例外クラス"""
     pass
 
-# 環境変数の読み込み
 load_dotenv()
 
-# ログ設定
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -29,10 +26,8 @@ logging.basicConfig(
     ]
 )
 
-# DATABASE_URL 環境変数を取得
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-# コネクションプールの初期化
 try:
     db_pool = pool.SimpleConnectionPool(
         minconn=1, maxconn=10, dsn=DATABASE_URL, sslmode='require'
@@ -41,7 +36,6 @@ except psycopg2.Error as e:
     logging.error(f"データベース接続プールの初期化中にエラー: {e}")
     db_pool = None
 
-# データベース接続を取得
 def get_db_connection():
     try:
         if db_pool:
@@ -52,7 +46,6 @@ def get_db_connection():
         logging.error(f"データベース接続中にエラー: {e}")
         return None
 
-# データベース接続をリリース
 def release_db_connection(conn):
     try:
         if db_pool and conn:
@@ -60,7 +53,6 @@ def release_db_connection(conn):
     except psycopg2.Error as e:
         logging.error(f"データベース接続のリリース中にエラー: {e}")
 
-# テーブルの初期化
 def initialize_db():
     conn = get_db_connection()
     if not conn:
@@ -86,7 +78,6 @@ def initialize_db():
 
 initialize_db()
 
-# Bot設定
 intents = discord.Intents.default()
 intents.messages = True
 intents.message_content = True
@@ -95,17 +86,14 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 
-# スレッドとリアクションIDの定義
 THREAD_ID = 1288407362318893109
 READ_LATER_REACTION_ID = 1304690617405669376
 FAVORITE_REACTION_ID = 1304690627723657267
 RANDOM_EXCLUDE_REACTION_ID = 1304763661172346973
-SPECIAL_EXCLUDE_AUTHOR = 695096014482440244  # 特定の投稿者IDを除外
+SPECIAL_EXCLUDE_AUTHOR = 695096014482440244
 
-# ユーザーごとに最後に選ばれた投稿者を記録する辞書
 last_chosen_authors = {}
 
-# 非同期でリアクションの辞書を取得する関数
 async def get_reactions_dict(message):
     reactions = {}
     for reaction in message.reactions:
@@ -114,7 +102,6 @@ async def get_reactions_dict(message):
             reactions[str(reaction.emoji.id)] = users
     return reactions
 
-# メッセージをデータベースに保存
 async def save_message_to_db(message):
     conn = get_db_connection()
     if not conn:
@@ -140,7 +127,6 @@ async def save_message_to_db(message):
     finally:
         release_db_connection(conn)
 
-# データベースのリアクション情報を更新
 async def update_reactions_in_db(message_id):
     channel = bot.get_channel(THREAD_ID)
     if channel is None:
@@ -158,18 +144,14 @@ async def update_reactions_in_db(message_id):
         logging.error(f"メッセージ {message_id} の取得中にエラー: {e}")
         return
 
-    # メッセージのリアクション情報を更新
     await save_message_to_db(message)
 
 def user_reacted(msg, reaction_id, user_id):
     reaction_data = msg['reactions']
-    # reactionsがNoneの場合は空dictとして扱う
     if reaction_data is None:
         reaction_data = {}
-
     if isinstance(reaction_data, str):
         reaction_data = json.loads(reaction_data)
-
     users = reaction_data.get(str(reaction_id), [])
     return user_id in users
 
@@ -182,26 +164,22 @@ def get_random_message(thread_id, filter_func=None):
             cur.execute("SELECT * FROM messages WHERE thread_id = %s", (thread_id,))
             messages = cur.fetchall()
             for msg in messages:
-                # reactionsがstrの場合はJSONデコード、Noneの場合は空dict
                 if msg['reactions'] is None:
                     msg['reactions'] = {}
                 elif isinstance(msg['reactions'], str):
                     msg['reactions'] = json.loads(msg['reactions']) or {}
-
             if filter_func:
                 messages = [m for m in messages if filter_func(m)]
             if not messages:
-                logging.warning("指定された条件に合うメッセージがありませんでした。")
-                raise ValueError("指定された条件に合うメッセージがありませんでした。")
+                # メッセージがない場合はNoneを返す
+                return None
             return random.choice(messages)
     except psycopg2.Error as e:
         logging.error(f"データベース操作中にエラー: {e}")
-        raise DatabaseQueryError(f"データベースエラーが発生しました: {e}")
-    except ValueError as e:
-        raise
+        # エラー時はNoneを返す
+        return None
     finally:
         release_db_connection(conn)
-
 
 class CombinedView(discord.ui.View):
     def __init__(self):
@@ -309,7 +287,6 @@ class CombinedView(discord.ui.View):
                 f"{interaction.user.mention} さんには、<@{random_message['author_id']}> さんが投稿したこの本がおすすめだよ！\n"
                 f"https://discord.com/channels/{interaction.guild.id}/{THREAD_ID}/{random_message['message_id']}"
             )
-            # 再度パネルを下部へ送信
             await self.repost_panel(interaction)
         else:
             await interaction.response.send_message("条件に合う投稿が見つかりませんでした。", ephemeral=True)
@@ -317,33 +294,38 @@ class CombinedView(discord.ui.View):
     async def repost_panel(self, interaction):
         embed = create_panel_embed()
         new_view = CombinedView()
-        # create_table_layout()呼び出し削除
         await interaction.followup.send(embed=embed, view=new_view)
 
 def create_panel_embed():
     embed = discord.Embed(
-        title="🎯エロ漫画ルーレット",
         description=(
-            "botがエロ漫画を選んでくれるよ！<a:c296:1288305823323263029>\n"
-            "■ 青ボタン（上段）\n"
-            "【ランダム】：全体からランダムで1つ\n"
-            "【あとで読む】：<:b434:1304690617405669376>を付けた自分用の投稿から\n"
-            "【お気に入り】：<:b435:1304690627723657267>を付けた自分用の投稿から\n\n"
-            "■ 赤ボタン（下段）\n"
-            "【ランダム】：<:b436:1304763661172346973>を付けた自分用の投稿は除外\n"
-            "【あとで読む】：あとで読む付き＆ランダム除外なしの自分用投稿から"
+            "botがｴﾛ漫画を選んでくれるよ！<a:c296:1288305823323263029>\n\n"
+            "🔵：自分の<:b431:1289782471197458495>を除外しない\n"
+            "🔴：自分の<:b431:1289782471197458495>を除外する\n\n"
+            "【ランダム】：全体から選ぶ\n"
+            "【あとで読む】：<:b434:1304690617405669376>を付けた投稿から選ぶ\n"
+            "【お気に入り】：<:b435:1304690627723657267>を付けた投稿から選ぶ"
         ),
         color=discord.Color.magenta()
     )
     return embed
 
-# /panel コマンド
 @bot.tree.command(name="panel")
 async def panel(interaction: discord.Interaction):
     embed = create_panel_embed()
     view = CombinedView()
-    # create_table_layout()呼び出し削除
     await interaction.response.send_message(embed=embed, view=view)
+
+@bot.tree.command(name="update_db")
+async def update_db(interaction: discord.Interaction):
+    """全てのメッセージをDBに再保存するコマンド"""
+    await interaction.response.defer(thinking=True)
+    try:
+        await save_all_messages_to_db()
+        await interaction.followup.send("全てのメッセージをデータベースに保存しました。", ephemeral=True)
+    except Exception as e:
+        logging.error(f"update_dbコマンド中にエラーが発生しました: {e}")
+        await interaction.followup.send(f"エラーが発生しました: {e}", ephemeral=True)
 
 @bot.event
 async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
@@ -354,12 +336,26 @@ async def save_all_messages_to_db_task():
     await save_all_messages_to_db()
 
 async def save_all_messages_to_db():
-    pass
+    channel = bot.get_channel(THREAD_ID)
+    if channel:
+        try:
+            async for message in channel.history(limit=None):
+                await save_message_to_db(message)
+            logging.info("全てのメッセージをデータベースに保存しました。")
+        except discord.HTTPException as e:
+            logging.error(f"メッセージ履歴の取得中にエラーが発生しました: {e}")
+    else:
+        logging.error("指定されたTHREAD_IDのチャンネルが見つかりません。")
 
 @bot.event
 async def on_ready():
     save_all_messages_to_db_task.start()
     logging.info(f"Botが起動しました！ {bot.user}")
+    try:
+        synced = await bot.tree.sync()
+        logging.info(f"スラッシュコマンドが同期されました。: {synced}")
+    except Exception as e:
+        logging.error(f"スラッシュコマンドの同期中にエラーが発生しました: {e}")
 
 @bot.event
 async def on_shutdown():
