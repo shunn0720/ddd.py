@@ -171,12 +171,10 @@ def get_random_message(thread_id, filter_func=None):
             if filter_func:
                 messages = [m for m in messages if filter_func(m)]
             if not messages:
-                # メッセージがない場合はNoneを返す
                 return None
             return random.choice(messages)
     except psycopg2.Error as e:
         logging.error(f"データベース操作中にエラー: {e}")
-        # エラー時はNoneを返す
         return None
     finally:
         release_db_connection(conn)
@@ -287,6 +285,12 @@ class CombinedView(discord.ui.View):
                 f"{interaction.user.mention} さんには、<@{random_message['author_id']}> さんが投稿したこの本がおすすめだよ！\n"
                 f"https://discord.com/channels/{interaction.guild.id}/{THREAD_ID}/{random_message['message_id']}"
             )
+            # 元のパネルメッセージ(Embed+View)を削除
+            try:
+                await interaction.message.delete()
+            except discord.DiscordException as e:
+                logging.error(f"メッセージ削除に失敗しました: {e}")
+            # 再投稿
             await self.repost_panel(interaction)
         else:
             await interaction.response.send_message("条件に合う投稿が見つかりませんでした。", ephemeral=True)
@@ -318,7 +322,6 @@ async def panel(interaction: discord.Interaction):
 
 @bot.tree.command(name="update_db")
 async def update_db(interaction: discord.Interaction):
-    """全てのメッセージをDBに再保存するコマンド"""
     await interaction.response.defer(thinking=True)
     try:
         await save_all_messages_to_db()
