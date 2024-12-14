@@ -180,6 +180,51 @@ def get_random_message(thread_id, filter_func=None):
     finally:
         release_db_connection(conn)
 
+async def get_reaction_users_from_db(message_id: int, emoji_id: int):
+    """DBから特定のmessage_idとemoji_idに紐づくユーザーリストを取得"""
+    conn = get_db_connection()
+    if not conn:
+        return None
+    try:
+        with conn.cursor(cursor_factory=DictCursor) as cur:
+            cur.execute("SELECT reactions FROM messages WHERE message_id = %s", (message_id,))
+            row = cur.fetchone()
+            if row and row['reactions']:
+                reaction_data = row['reactions']
+                if isinstance(reaction_data, str):
+                    reaction_data = json.loads(reaction_data)
+                users = reaction_data.get(str(emoji_id), [])
+                return users
+    except Exception as e:
+        logging.error(f"DBからリアクション情報取得中にエラーが発生しました: {e}")
+    finally:
+        release_db_connection(conn)
+    return None
+
+async def get_reaction_users_from_discord(message_id: int, emoji_id: int, channel: discord.TextChannel):
+    """Discord APIから直接message_idとemoji_idに紐づくユーザーリストを取得"""
+    try:
+        message = await channel.fetch_message(message_id)
+    except discord.DiscordException as e:
+        logging.error(f"メッセージ取得中にエラー: {e}")
+        return []
+    
+    for reaction in message.reactions:
+        if hasattr(reaction.emoji, 'id') and reaction.emoji.id == emoji_id:
+            users = [user.id async for user in reaction.users()]
+            return users
+    return []
+
+async def get_reaction_users(message_id: int, emoji_id: int, channel: discord.TextChannel):
+    """
+    DBから取得を試み、なければDiscord APIから取得してユーザーIDリストを返す。
+    """
+    users = await get_reaction_users_from_db(message_id, emoji_id)
+    if users is not None:
+        return users
+    # DBに情報がない場合、Discord APIから取得
+    return await get_reaction_users_from_discord(message_id, emoji_id, channel)
+
 class CombinedView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -336,7 +381,13 @@ async def update_db(interaction: discord.Interaction):
         await interaction.followup.send(f"エラーが発生しました: {e}", ephemeral=True)
 
 @bot.event
+async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
+    # リアクションが追加された時にもDB更新
+    await update_reactions_in_db(payload.message_id)
+
+@bot.event
 async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
+    # リアクションが削除された時にもDB更新
     await update_reactions_in_db(payload.message_id)
 
 @tasks.loop(minutes=60)
@@ -347,9 +398,7 @@ async def save_all_messages_to_db():
     channel = bot.get_channel(THREAD_ID)
     if channel:
         try:
-            # limit引数を指定して処理が長引かないようにする
-            # たとえば100件までに限定
-            limit_count = 100
+            limit_count = 100  # 必要に応じて調整
             count = 0
             async for message in channel.history(limit=limit_count):
                 await save_message_to_db(message)
