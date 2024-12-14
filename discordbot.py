@@ -87,9 +87,9 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 
 THREAD_ID = 1288407362318893109
-READ_LATER_REACTION_ID = 1316997135878717442   # <:b434:1316997135878717442>
-FAVORITE_REACTION_ID = 1316997169949048904     # <:b435:1316997169949048904>
-RANDOM_EXCLUDE_REACTION_ID = 1316997183509102603 # <:b436:1316997183509102603>
+READ_LATER_REACTION_ID = 1316997135878717442   
+FAVORITE_REACTION_ID = 1316997169949048904     
+RANDOM_EXCLUDE_REACTION_ID = 1316997183509102603
 SPECIAL_EXCLUDE_AUTHOR = 695096014482440244
 
 last_chosen_authors = {}
@@ -191,7 +191,6 @@ class CombinedView(discord.ui.View):
                 user = await bot.fetch_user(author_id)
             except discord.NotFound:
                 user = None
-        # 表示名 (display_name) を優先して使用
         return user.display_name if user and user.display_name else (user.name if user else "不明なユーザー")
 
     async def handle_selection(self, interaction, random_message):
@@ -200,7 +199,6 @@ class CombinedView(discord.ui.View):
             if random_message:
                 last_chosen_authors[interaction.user.id] = random_message['author_id']
                 author_name = await self.get_author_name(random_message['author_id'])
-                # 投稿者の表示名をそのまま表示する
                 await interaction.followup.send(
                     f"{interaction.user.mention} さんには、{author_name} さんが投稿したこの本がおすすめだよ！\n"
                     f"https://discord.com/channels/{interaction.guild.id}/{THREAD_ID}/{random_message['message_id']}"
@@ -314,8 +312,8 @@ def create_panel_embed():
             "🔵：自分の<:b431:1289782471197458495>を除外しない\n"
             "🔴：自分の<:b431:1289782471197458495>を除外する\n\n"
             "【ランダム】：全体から選ぶ\n"
-            f"【あとで読む】：<:b434:{READ_LATER_REACTION_ID}>を付けた投稿から選ぶ\n"
-            f"【お気に入り】：<:b435:{FAVORITE_REACTION_ID}>を付けた投稿から選ぶ"
+            "【あとで読む】：<:b434:1304690617405669376>を付けた投稿から選ぶ\n"
+            "【お気に入り】：<:b435:1304690627723657267>を付けた投稿から選ぶ"
         ),
         color=discord.Color.magenta()
     )
@@ -349,9 +347,16 @@ async def save_all_messages_to_db():
     channel = bot.get_channel(THREAD_ID)
     if channel:
         try:
-            async for message in channel.history(limit=None):
+            # limit引数を指定して処理が長引かないようにする
+            # たとえば100件までに限定
+            limit_count = 100
+            count = 0
+            async for message in channel.history(limit=limit_count):
                 await save_message_to_db(message)
-            logging.info("全てのメッセージをデータベースに保存しました。")
+                count += 1
+                if count % 10 == 0:
+                    logging.info(f"{count}件のメッセージを処理中...")
+            logging.info(f"最大{limit_count}件のメッセージをデータベースに保存しました。")
         except discord.HTTPException as e:
             logging.error(f"メッセージ履歴の取得中にエラーが発生しました: {e}")
     else:
