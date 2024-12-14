@@ -12,7 +12,6 @@ from dotenv import load_dotenv
 import json
 
 class DatabaseQueryError(Exception):
-    """データベースクエリ実行時のエラーを表す例外クラス"""
     pass
 
 load_dotenv()
@@ -87,9 +86,10 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 
 THREAD_ID = 1288407362318893109
-READ_LATER_REACTION_ID = 1316997135878717442   
-FAVORITE_REACTION_ID = 1316997169949048904     
-RANDOM_EXCLUDE_REACTION_ID = 1316997183509102603
+# 新たに指示された絵文字IDに変更
+READ_LATER_REACTION_ID = 1304690617405669376   # <:b434:1304690617405669376>
+FAVORITE_REACTION_ID = 1304690627723657267     # <:b435:1304690627723657267>
+RANDOM_EXCLUDE_REACTION_ID = 1289782471197458495 # <:b436:1289782471197458495>
 SPECIAL_EXCLUDE_AUTHOR = 695096014482440244
 
 last_chosen_authors = {}
@@ -97,7 +97,7 @@ last_chosen_authors = {}
 async def get_reactions_dict(message):
     reactions = {}
     for reaction in message.reactions:
-        if hasattr(reaction.emoji, 'id'):  # カスタム絵文字の場合
+        if hasattr(reaction.emoji, 'id'):
             users = [user.id async for user in reaction.users()]
             reactions[str(reaction.emoji.id)] = users
     return reactions
@@ -180,51 +180,6 @@ def get_random_message(thread_id, filter_func=None):
     finally:
         release_db_connection(conn)
 
-async def get_reaction_users_from_db(message_id: int, emoji_id: int):
-    """DBから特定のmessage_idとemoji_idに紐づくユーザーリストを取得"""
-    conn = get_db_connection()
-    if not conn:
-        return None
-    try:
-        with conn.cursor(cursor_factory=DictCursor) as cur:
-            cur.execute("SELECT reactions FROM messages WHERE message_id = %s", (message_id,))
-            row = cur.fetchone()
-            if row and row['reactions']:
-                reaction_data = row['reactions']
-                if isinstance(reaction_data, str):
-                    reaction_data = json.loads(reaction_data)
-                users = reaction_data.get(str(emoji_id), [])
-                return users
-    except Exception as e:
-        logging.error(f"DBからリアクション情報取得中にエラーが発生しました: {e}")
-    finally:
-        release_db_connection(conn)
-    return None
-
-async def get_reaction_users_from_discord(message_id: int, emoji_id: int, channel: discord.TextChannel):
-    """Discord APIから直接message_idとemoji_idに紐づくユーザーリストを取得"""
-    try:
-        message = await channel.fetch_message(message_id)
-    except discord.DiscordException as e:
-        logging.error(f"メッセージ取得中にエラー: {e}")
-        return []
-    
-    for reaction in message.reactions:
-        if hasattr(reaction.emoji, 'id') and reaction.emoji.id == emoji_id:
-            users = [user.id async for user in reaction.users()]
-            return users
-    return []
-
-async def get_reaction_users(message_id: int, emoji_id: int, channel: discord.TextChannel):
-    """
-    DBから取得を試み、なければDiscord APIから取得してユーザーIDリストを返す。
-    """
-    users = await get_reaction_users_from_db(message_id, emoji_id)
-    if users is not None:
-        return users
-    # DBに情報がない場合、Discord APIから取得
-    return await get_reaction_users_from_discord(message_id, emoji_id, channel)
-
 class CombinedView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -258,6 +213,8 @@ class CombinedView(discord.ui.View):
                 "投稿を読み込む際にエラーが発生しました。しばらくしてから再試行してください。", ephemeral=True
             )
 
+    # ランダム(青)
+    # 全体から選ぶが、自分投稿・特定投稿者・連続投稿者除外
     @discord.ui.button(label="ランダム", style=discord.ButtonStyle.primary, row=0)
     async def random_normal(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
@@ -275,10 +232,13 @@ class CombinedView(discord.ui.View):
         except Exception as e:
             await interaction.response.send_message(str(e), ephemeral=True)
 
+    # あとで読む(青)
+    # ボタン押したユーザーがb434リアクションを付けた投稿から選ぶ(自・特定・連続除外)
     @discord.ui.button(label="あとで読む", style=discord.ButtonStyle.primary, row=0)
     async def read_later(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
             def filter_func(msg):
+                # <:b434:1304690617405669376>
                 if not user_reacted(msg, READ_LATER_REACTION_ID, interaction.user.id):
                     return False
                 if msg['author_id'] == interaction.user.id:
@@ -288,15 +248,19 @@ class CombinedView(discord.ui.View):
                 if last_chosen_authors.get(interaction.user.id) == msg['author_id']:
                     return False
                 return True
+
             random_message = get_random_message(THREAD_ID, filter_func)
             await self.handle_selection(interaction, random_message)
         except Exception as e:
             await interaction.response.send_message(str(e), ephemeral=True)
 
+    # お気に入り(青)
+    # ボタン押したユーザーがb435リアクションを付けた投稿から選ぶ(自・特定・連続除外)
     @discord.ui.button(label="お気に入り", style=discord.ButtonStyle.primary, row=0)
     async def favorite(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
             def filter_func(msg):
+                # <:b435:1304690627723657267>
                 if not user_reacted(msg, FAVORITE_REACTION_ID, interaction.user.id):
                     return False
                 if msg['author_id'] == interaction.user.id:
@@ -306,15 +270,19 @@ class CombinedView(discord.ui.View):
                 if last_chosen_authors.get(interaction.user.id) == msg['author_id']:
                     return False
                 return True
+
             random_message = get_random_message(THREAD_ID, filter_func)
             await self.handle_selection(interaction, random_message)
         except Exception as e:
             await interaction.response.send_message(str(e), ephemeral=True)
 
+    # ランダム(赤)
+    # ユーザーがb436リアクション付けた投稿は除外、それ以外から選ぶ(自・特定・連続除外)
     @discord.ui.button(label="ランダム", style=discord.ButtonStyle.danger, row=1)
     async def random_exclude(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
             def filter_func(msg):
+                # <:b436:1289782471197458495>を付けた投稿は除外
                 if user_reacted(msg, RANDOM_EXCLUDE_REACTION_ID, interaction.user.id):
                     return False
                 if msg['author_id'] == interaction.user.id:
@@ -324,17 +292,22 @@ class CombinedView(discord.ui.View):
                 if last_chosen_authors.get(interaction.user.id) == msg['author_id']:
                     return False
                 return True
+
             random_message = get_random_message(THREAD_ID, filter_func)
             await self.handle_selection(interaction, random_message)
         except Exception as e:
             await interaction.response.send_message(str(e), ephemeral=True)
 
+    # あとで読む(赤)
+    # b434リアクションを付けた投稿の中から、b436リアクションを付けたものを除外して選ぶ(自・特定・連続除外)
     @discord.ui.button(label="あとで読む", style=discord.ButtonStyle.danger, row=1)
     async def conditional_read(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
             def filter_func(msg):
+                # b434付けているか
                 if not user_reacted(msg, READ_LATER_REACTION_ID, interaction.user.id):
                     return False
+                # b436付けていたら除外
                 if user_reacted(msg, RANDOM_EXCLUDE_REACTION_ID, interaction.user.id):
                     return False
                 if msg['author_id'] == interaction.user.id:
@@ -382,12 +355,10 @@ async def update_db(interaction: discord.Interaction):
 
 @bot.event
 async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
-    # リアクションが追加された時にもDB更新
     await update_reactions_in_db(payload.message_id)
 
 @bot.event
 async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
-    # リアクションが削除された時にもDB更新
     await update_reactions_in_db(payload.message_id)
 
 @tasks.loop(minutes=60)
@@ -398,7 +369,7 @@ async def save_all_messages_to_db():
     channel = bot.get_channel(THREAD_ID)
     if channel:
         try:
-            limit_count = 100  # 必要に応じて調整
+            limit_count = 100
             count = 0
             async for message in channel.history(limit=limit_count):
                 await save_message_to_db(message)
