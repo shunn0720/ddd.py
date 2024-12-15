@@ -225,12 +225,12 @@ class CombinedView(discord.ui.View):
                 )
             else:
                 await interaction.channel.send(
-                    f"{interaction.user.mention} 条件に合う投稿が見つかりませんでした。"
+                    f"{interaction.user.mention} 条件に合う投稿がないんだなっつ！"
                 )
         except Exception as e:
             logging.error(f"メッセージの取得または応答中にエラーが発生しました: {e}")
             await interaction.channel.send(
-                f"{interaction.user.mention} 投稿を読み込む際にエラーが発生しました。しばらくしてから再試行してください。"
+                f"{interaction.user.mention} エラーが発生したから、また後で試して～"
             )
         finally:
             # パネルを再送信して最下部に移動させる
@@ -351,13 +351,14 @@ def create_panel_embed():
     )
     return embed
 
-@bot.tree.command(name="panel", default_permission=False)
+def is_specific_user():
+    async def predicate(interaction: discord.Interaction) -> bool:
+        return interaction.user.id == 822460191118721034
+    return app_commands.check(predicate)
+
+@bot.tree.command(name="panel")
+@is_specific_user()
 async def panel(interaction: discord.Interaction):
-    # 指定されたユーザーのみコマンドを実行できるように権限を設定
-    target_user_id = 822460191118721034
-    if interaction.user.id != target_user_id:
-        await interaction.response.send_message("このコマンドを実行する権限がありません。", ephemeral=True)
-        return
     # パネルを送信
     await interaction.response.defer()
     channel = bot.get_channel(THREAD_ID)
@@ -367,13 +368,9 @@ async def panel(interaction: discord.Interaction):
         return
     await send_panel(channel)
 
-@bot.tree.command(name="update_db", default_permission=False)
+@bot.tree.command(name="update_db")
+@is_specific_user()
 async def update_db(interaction: discord.Interaction):
-    # 指定されたユーザーのみコマンドを実行できるように権限を設定
-    target_user_id = 822460191118721034
-    if interaction.user.id != target_user_id:
-        await interaction.response.send_message("このコマンドを実行する権限がありません。", ephemeral=True)
-        return
     await interaction.response.defer(thinking=True)
     try:
         await save_all_messages_to_db()
@@ -381,6 +378,14 @@ async def update_db(interaction: discord.Interaction):
     except Exception as e:
         logging.error(f"update_dbコマンド中にエラーが発生しました: {e}")
         await interaction.followup.send(f"エラーが発生しました: {e}", ephemeral=True)
+
+@bot.event
+async def on_command_error(interaction: discord.Interaction, error):
+    if isinstance(error, app_commands.CheckFailure):
+        await interaction.response.send_message("このコマンドを実行する権限がありません。", ephemeral=True)
+    else:
+        # 他のエラーを処理
+        logging.error(f"Unhandled exception: {error}")
 
 @bot.event
 async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
