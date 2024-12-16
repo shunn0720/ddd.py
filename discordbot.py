@@ -32,7 +32,7 @@ try:
         minconn=1, maxconn=10, dsn=DATABASE_URL, sslmode='require'
     )
 except Error as e:
-    logging.error(f"データベース接続プールの初期化中にエラー: {e} pgcode={e.pgcode}, detail={getattr(e.diag, 'message_detail', '')}")
+    logging.error(f"データベース接続プールの初期化中にエラー: {e} pgcode={getattr(e, 'pgcode', '')}, detail={getattr(getattr(e, 'diag', None), 'message_detail', '')}")
     db_pool = None
 
 def get_db_connection():
@@ -42,7 +42,7 @@ def get_db_connection():
         else:
             raise Error("データベース接続プールが初期化されていません。")
     except Error as e:
-        logging.error(f"データベース接続中にエラー: {e} pgcode={e.pgcode}, detail={getattr(e.diag, 'message_detail', '')}")
+        logging.error(f"データベース接続中にエラー: {e} pgcode={getattr(e, 'pgcode', '')}, detail={getattr(getattr(e, 'diag', None), 'message_detail', '')}")
         return None
 
 def release_db_connection(conn):
@@ -50,7 +50,7 @@ def release_db_connection(conn):
         if db_pool and conn:
             db_pool.putconn(conn)
     except Error as e:
-        logging.error(f"データベース接続のリリース中にエラー: {e} pgcode={e.pgcode}, detail={getattr(e.diag, 'message_detail', '')}")
+        logging.error(f"データベース接続のリリース中にエラー: {e} pgcode={getattr(e, 'pgcode', '')}, detail={getattr(getattr(e, 'diag', None), 'message_detail', '')}")
 
 def initialize_db():
     conn = get_db_connection()
@@ -71,7 +71,7 @@ def initialize_db():
             conn.commit()
         logging.info("データベースの初期化が完了しました。")
     except Error as e:
-        logging.error(f"テーブルの初期化中にエラー: {e} pgcode={e.pgcode}, detail={getattr(e.diag, 'message_detail', '')}")
+        logging.error(f"テーブルの初期化中にエラー: {e} pgcode={getattr(e, 'pgcode', '')}, detail={getattr(getattr(e, 'diag', None), 'message_detail', '')}")
     finally:
         release_db_connection(conn)
 
@@ -85,6 +85,7 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 
+# データベースからメッセージを取得・保存する際に参照するTHREAD_ID
 THREAD_ID = 1288407362318893109
 READ_LATER_REACTION_ID = 1304690617405669376
 FAVORITE_REACTION_ID = 1304690627723657267
@@ -92,7 +93,7 @@ RANDOM_EXCLUDE_REACTION_ID = 1289782471197458495
 SPECIAL_EXCLUDE_AUTHOR = 695096014482440244
 
 last_chosen_authors = {}
-current_panel_message_id = None
+current_panel_message_id = None  # 現在表示中のパネルメッセージID
 
 async def get_reactions_dict(message):
     reactions = {}
@@ -103,7 +104,6 @@ async def get_reactions_dict(message):
     return reactions
 
 async def save_message_to_db(message):
-    # 個別メッセージ保存関数
     conn = get_db_connection()
     if not conn:
         return
@@ -124,28 +124,20 @@ async def save_message_to_db(message):
             ))
             conn.commit()
     except Error as e:
-        logging.error(f"メッセージ保存中にエラー: {e} pgcode={e.pgcode}, detail={getattr(e.diag, 'message_detail', '')}")
+        logging.error(f"メッセージ保存中にエラー: {e} pgcode={getattr(e, 'pgcode', '')}, detail={getattr(getattr(e, 'diag', None), 'message_detail', '')}")
     finally:
         release_db_connection(conn)
 
 async def bulk_save_messages_to_db(messages):
-    # 複数メッセージを一度に保存する関数
     conn = get_db_connection()
     if not conn or not messages:
         return
     try:
-        # バルクインサート用のタプルリスト作成
         data = []
         for message in messages:
             reactions_dict = await get_reactions_dict(message)
             reactions_json = json.dumps(reactions_dict)
-            data.append((
-                message.id,
-                THREAD_ID,
-                message.author.id,
-                reactions_json,
-                message.content
-            ))
+            data.append((message.id, THREAD_ID, message.author.id, reactions_json, message.content))
 
         with conn.cursor() as cur:
             cur.executemany("""
@@ -156,7 +148,7 @@ async def bulk_save_messages_to_db(messages):
             conn.commit()
         logging.info(f"{len(messages)}件のメッセージをバルク挿入または更新しました。")
     except Error as e:
-        logging.error(f"バルク挿入中にエラー: {e} pgcode={e.pgcode}, detail={getattr(e.diag, 'message_detail', '')}")
+        logging.error(f"バルク挿入中にエラー: {e} pgcode={getattr(e, 'pgcode', '')}, detail={getattr(getattr(e, 'diag', None), 'message_detail', '')}")
     finally:
         release_db_connection(conn)
 
@@ -208,7 +200,7 @@ def get_random_message(thread_id, filter_func=None):
                 return None
             return random.choice(messages)
     except Error as e:
-        logging.error(f"データベース操作中にエラー: {e} pgcode={e.pgcode}, detail={getattr(e.diag, 'message_detail', '')}")
+        logging.error(f"データベース操作中にエラー: {e} pgcode={getattr(e, 'pgcode', '')}, detail={getattr(getattr(e, 'diag', None), 'message_detail', '')}")
         return None
     finally:
         release_db_connection(conn)
@@ -278,18 +270,17 @@ class CombinedView(discord.ui.View):
                 )
             else:
                 await interaction.channel.send(
-                    f"{interaction.user.mention} 条件に合うやつなかったで～"
+                    f"{interaction.user.mention} 条件に合う投稿が見つかりませんでした。"
                 )
         except Exception as e:
             logging.error(f"メッセージの取得または応答中にエラーが発生しました: {e}")
             await interaction.channel.send(
-                f"{interaction.user.mention} エラーが発生してもうたから、しばらくしてからまた試して。"
+                f"{interaction.user.mention} 投稿を読み込む際にエラーが発生しました。しばらくしてから再試行してください。"
             )
         finally:
-            # パネルを再送信して最下部に移動させる
+            # パネルを再送信して最下部に移動
             await send_panel(interaction.channel)
 
-    # 共通処理関数：指定したfilter_funcでメッセージを取得して表示
     async def get_and_handle_random_message(self, interaction, filter_func):
         try:
             random_message = get_random_message(THREAD_ID, filter_func)
@@ -372,11 +363,12 @@ class CombinedView(discord.ui.View):
 @bot.tree.command(name="panel")
 @is_specific_user()
 async def panel(interaction: discord.Interaction):
+    # コマンドを打ったチャンネル (interaction.channel) にパネルを表示
     await interaction.response.defer()
-    channel = bot.get_channel(THREAD_ID)
+    channel = interaction.channel
     if channel is None:
-        logging.error(f"チャンネル {THREAD_ID} が見つかりませんでした。")
-        await interaction.followup.send("エラーが発生しました。チャンネルが見つかりません。", ephemeral=True)
+        logging.error("コマンドが実行されたチャンネルを取得できませんでした。")
+        await interaction.followup.send("エラーが発生しました。チャンネルが特定できません。", ephemeral=True)
         return
     await send_panel(channel)
 
