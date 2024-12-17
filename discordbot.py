@@ -277,9 +277,7 @@ class CombinedView(discord.ui.View):
             await interaction.channel.send(
                 f"{interaction.user.mention} 投稿を読み込む際にエラーが発生しました。しばらくしてから再試行してください。"
             )
-        finally:
-            # パネルを再送信して最下部に移動
-            await send_panel(interaction.channel)
+        # パネル再送呼び出しを削除し、考え中表示を減らす対応中のため変更なし
 
     async def get_and_handle_random_message(self, interaction, filter_func):
         try:
@@ -363,19 +361,21 @@ class CombinedView(discord.ui.View):
 @bot.tree.command(name="panel")
 @is_specific_user()
 async def panel(interaction: discord.Interaction):
-    # コマンドを打ったチャンネル (interaction.channel) にパネルを表示
-    await interaction.response.defer()
+    # deferを使わず、即座に応答する
     channel = interaction.channel
     if channel is None:
-        logging.error("コマンドが実行されたチャンネルを取得できませんでした。")
-        await interaction.followup.send("エラーが発生しました。チャンネルが特定できません。", ephemeral=True)
+        await interaction.response.send_message("エラーが発生しました。チャンネルが特定できません。", ephemeral=True)
         return
+    # 即座にメッセージを返してからパネルを送信
+    await interaction.response.send_message("パネルを表示します！", ephemeral=False)
     await send_panel(channel)
 
 @bot.tree.command(name="update_db")
 @is_specific_user()
 async def update_db(interaction: discord.Interaction):
-    await interaction.response.defer(thinking=True)
+    # 処理が長い場合は考え中が出る可能性はあるが、
+    # とりあえず即レスし、その後followupで結果を通知
+    await interaction.response.send_message("データベースを更新しています...", ephemeral=True)
     try:
         await save_all_messages_to_db()
         await interaction.followup.send("全てのメッセージをデータベースに保存しました。", ephemeral=True)
