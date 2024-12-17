@@ -28,31 +28,48 @@ logging.basicConfig(
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 try:
+    # データベース接続プールの初期化（minconn, maxconnは実情に応じて調整）
     db_pool = pool.SimpleConnectionPool(
         minconn=1, maxconn=10, dsn=DATABASE_URL, sslmode='require'
     )
+    logging.info("データベース接続プールが初期化されました。")
 except Error as e:
-    logging.error(f"データベース接続プールの初期化中にエラー: {e} pgcode={getattr(e, 'pgcode', '')}, detail={getattr(getattr(e, 'diag', None), 'message_detail', '')}")
+    logging.error(
+        f"データベース接続プール初期化エラー: {e} "
+        f"pgcode={getattr(e, 'pgcode', '')}, "
+        f"detail={getattr(getattr(e, 'diag', None), 'message_detail', '')}"
+    )
     db_pool = None
 
 def get_db_connection():
+    """プールからDBコネクションを取得する"""
     try:
         if db_pool:
             return db_pool.getconn()
         else:
             raise Error("データベース接続プールが初期化されていません。")
     except Error as e:
-        logging.error(f"データベース接続中にエラー: {e} pgcode={getattr(e, 'pgcode', '')}, detail={getattr(getattr(e, 'diag', None), 'message_detail', '')}")
+        logging.error(
+            f"データベース接続中にエラー: {e} "
+            f"pgcode={getattr(e, 'pgcode', '')}, "
+            f"detail={getattr(getattr(e, 'diag', None), 'message_detail', '')}"
+        )
         return None
 
 def release_db_connection(conn):
+    """DBコネクションをプールに返す"""
     try:
         if db_pool and conn:
             db_pool.putconn(conn)
     except Error as e:
-        logging.error(f"データベース接続のリリース中にエラー: {e} pgcode={getattr(e, 'pgcode', '')}, detail={getattr(getattr(e, 'diag', None), 'message_detail', '')}")
+        logging.error(
+            f"データベース接続のリリース中にエラー: {e} "
+            f"pgcode={getattr(e, 'pgcode', '')}, "
+            f"detail={getattr(getattr(e, 'diag', None), 'message_detail', '')}"
+        )
 
 def initialize_db():
+    """テーブル作成などの初期化処理"""
     conn = get_db_connection()
     if not conn:
         return
@@ -71,7 +88,11 @@ def initialize_db():
             conn.commit()
         logging.info("データベースの初期化が完了しました。")
     except Error as e:
-        logging.error(f"テーブルの初期化中にエラー: {e} pgcode={getattr(e, 'pgcode', '')}, detail={getattr(getattr(e, 'diag', None), 'message_detail', '')}")
+        logging.error(
+            f"テーブル初期化中エラー: {e} "
+            f"pgcode={getattr(e, 'pgcode', '')}, "
+            f"detail={getattr(getattr(e, 'diag', None), 'message_detail', '')}"
+        )
     finally:
         release_db_connection(conn)
 
@@ -85,7 +106,7 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 
-# データベースからメッセージを取得・保存する際に参照するTHREAD_ID
+# 設定値は適宜環境に合わせて変更
 THREAD_ID = 1288407362318893109
 READ_LATER_REACTION_ID = 1304690617405669376
 FAVORITE_REACTION_ID = 1304690627723657267
@@ -93,94 +114,128 @@ RANDOM_EXCLUDE_REACTION_ID = 1289782471197458495
 SPECIAL_EXCLUDE_AUTHOR = 695096014482440244
 
 last_chosen_authors = {}
-current_panel_message_id = None  # 現在表示中のパネルメッセージID
+current_panel_message_id = None
 
-async def get_reactions_dict(message):
-    reactions = {}
-    for reaction in message.reactions:
-        if hasattr(reaction.emoji, 'id'):
-            users = [user.id async for user in reaction.users()]
-            reactions[str(reaction.emoji.id)] = users
-    return reactions
+async def run_in_threadpool(func, *args, **kwargs):
+    """同期的なDB処理をスレッドプールで非同期的に実行"""
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, func, *args, **kwargs)
 
-async def save_message_to_db(message):
+def save_message_to_db_sync(message_id, author_id, content):
+    """同期的なメッセージ保存処理（DBアクセス）"""
     conn = get_db_connection()
     if not conn:
         return
     try:
-        reactions_dict = await get_reactions_dict(message)
-        reactions_json = json.dumps(reactions_dict)
+        # 初回はreactionsを空辞書で保存
+        reactions_json = json.dumps({})
         with conn.cursor() as cur:
             cur.execute("""
             INSERT INTO messages (message_id, thread_id, author_id, reactions, content)
             VALUES (%s, %s, %s, %s, %s)
-            ON CONFLICT (message_id) DO UPDATE SET reactions = EXCLUDED.reactions
+            ON CONFLICT (message_id) DO UPDATE SET content = EXCLUDED.content
             """, (
-                message.id,
+                message_id,
                 THREAD_ID,
-                message.author.id,
+                author_id,
                 reactions_json,
-                message.content
+                content
             ))
             conn.commit()
     except Error as e:
-        logging.error(f"メッセージ保存中にエラー: {e} pgcode={getattr(e, 'pgcode', '')}, detail={getattr(getattr(e, 'diag', None), 'message_detail', '')}")
+        logging.error(
+            f"メッセージ保存中エラー: {e} "
+            f"pgcode={getattr(e, 'pgcode', '')}, "
+            f"detail={getattr(getattr(e, 'diag', None), 'message_detail', '')}"
+        )
     finally:
         release_db_connection(conn)
 
-async def bulk_save_messages_to_db(messages):
+async def save_message_to_db(message):
+    """非同期関数として呼び出せるメッセージ保存"""
+    await run_in_threadpool(save_message_to_db_sync, message.id, message.author.id, message.content)
+
+def bulk_save_messages_to_db_sync(messages):
+    """同期的なバルク挿入"""
     conn = get_db_connection()
     if not conn or not messages:
         return
     try:
         data = []
         for message in messages:
-            reactions_dict = await get_reactions_dict(message)
-            reactions_json = json.dumps(reactions_dict)
+            reactions_json = json.dumps({})
             data.append((message.id, THREAD_ID, message.author.id, reactions_json, message.content))
 
         with conn.cursor() as cur:
             cur.executemany("""
                 INSERT INTO messages (message_id, thread_id, author_id, reactions, content)
                 VALUES (%s, %s, %s, %s, %s)
-                ON CONFLICT (message_id) DO UPDATE SET reactions = EXCLUDED.reactions
+                ON CONFLICT (message_id) DO UPDATE SET content = EXCLUDED.content
             """, data)
             conn.commit()
         logging.info(f"{len(messages)}件のメッセージをバルク挿入または更新しました。")
     except Error as e:
-        logging.error(f"バルク挿入中にエラー: {e} pgcode={getattr(e, 'pgcode', '')}, detail={getattr(getattr(e, 'diag', None), 'message_detail', '')}")
+        logging.error(
+            f"バルク挿入中エラー: {e} "
+            f"pgcode={getattr(e, 'pgcode', '')}, "
+            f"detail={getattr(getattr(e, 'diag', None), 'message_detail', '')}"
+        )
     finally:
         release_db_connection(conn)
 
-async def update_reactions_in_db(message_id):
-    channel = bot.get_channel(THREAD_ID)
-    if channel is None:
-        logging.error(f"チャンネル {THREAD_ID} が見つかりませんでした。")
+async def bulk_save_messages_to_db(messages):
+    await run_in_threadpool(bulk_save_messages_to_db_sync, messages)
+
+def update_reactions_in_db_sync(message_id, emoji_id, user_id, add=True):
+    """同期的なreactions更新処理"""
+    conn = get_db_connection()
+    if not conn:
         return
     try:
-        message = await channel.fetch_message(message_id)
-    except discord.NotFound:
-        logging.error(f"メッセージ {message_id} が見つかりませんでした。")
-        return
-    except discord.Forbidden:
-        logging.error(f"メッセージ {message_id} へのアクセスが拒否されました。")
-        return
-    except discord.HTTPException as e:
-        logging.error(f"メッセージ {message_id} の取得中にエラー: {e}")
-        return
+        with conn.cursor(cursor_factory=DictCursor) as cur:
+            cur.execute("SELECT reactions FROM messages WHERE message_id = %s", (message_id,))
+            row = cur.fetchone()
+            if not row:
+                # 未登録のメッセージなら無視
+                return
+            reactions = row['reactions'] or {}
+            str_emoji_id = str(emoji_id)
+            user_list = reactions.get(str_emoji_id, [])
 
-    await save_message_to_db(message)
+            if add:
+                if user_id not in user_list:
+                    user_list.append(user_id)
+            else:
+                if user_id in user_list:
+                    user_list.remove(user_id)
+
+            reactions[str_emoji_id] = user_list
+            cur.execute("UPDATE messages SET reactions = %s WHERE message_id = %s", (json.dumps(reactions), message_id))
+            conn.commit()
+    except Error as e:
+        logging.error(
+            f"reactions更新中エラー: {e} "
+            f"pgcode={getattr(e, 'pgcode', '')}, "
+            f"detail={getattr(getattr(e, 'diag', None), 'message_detail', '')}"
+        )
+    finally:
+        release_db_connection(conn)
+
+async def update_reactions_in_db(message_id, emoji_id, user_id, add=True):
+    await run_in_threadpool(update_reactions_in_db_sync, message_id, emoji_id, user_id, add)
 
 def user_reacted(msg, reaction_id, user_id):
+    """特定ユーザーが特定reaction_idに反応しているか判定"""
     reaction_data = msg['reactions']
     if reaction_data is None:
         reaction_data = {}
-    if isinstance(reaction_data, str):
+    elif isinstance(reaction_data, str):
         reaction_data = json.loads(reaction_data)
     users = reaction_data.get(str(reaction_id), [])
     return user_id in users
 
-def get_random_message(thread_id, filter_func=None):
+def get_random_message_sync(thread_id, filter_func=None):
+    """同期的なランダムメッセージ取得"""
     conn = get_db_connection()
     if not conn:
         return None
@@ -200,12 +255,20 @@ def get_random_message(thread_id, filter_func=None):
                 return None
             return random.choice(messages)
     except Error as e:
-        logging.error(f"データベース操作中にエラー: {e} pgcode={getattr(e, 'pgcode', '')}, detail={getattr(getattr(e, 'diag', None), 'message_detail', '')}")
+        logging.error(
+            f"ランダムメッセージ取得中エラー: {e} "
+            f"pgcode={getattr(e, 'pgcode', '')}, "
+            f"detail={getattr(getattr(e, 'diag', None), 'message_detail', '')}"
+        )
         return None
     finally:
         release_db_connection(conn)
 
+async def get_random_message(thread_id, filter_func=None):
+    return await run_in_threadpool(get_random_message_sync, thread_id, filter_func)
+
 async def send_panel(channel):
+    """パネルメッセージを送信または再表示する"""
     global current_panel_message_id
     if current_panel_message_id:
         try:
@@ -215,7 +278,7 @@ async def send_panel(channel):
         except discord.NotFound:
             logging.warning(f"以前のパネルメッセージ {current_panel_message_id} が見つかりません。")
         except discord.HTTPException as e:
-            logging.error(f"パネルメッセージ {current_panel_message_id} の削除中にエラー: {e}")
+            logging.error(f"パネルメッセージ削除中エラー: {e}")
 
     embed = create_panel_embed()
     view = CombinedView()
@@ -224,18 +287,20 @@ async def send_panel(channel):
         current_panel_message_id = sent_message.id
         logging.info(f"新しいパネルメッセージ {current_panel_message_id} を送信しました。")
     except discord.HTTPException as e:
-        logging.error(f"パネルメッセージの送信中にエラー: {e}")
+        logging.error(f"パネルメッセージ送信中エラー: {e}")
 
 def is_specific_user():
+    """特定ユーザーのみコマンドを実行可能にするためのチェック"""
     async def predicate(interaction: discord.Interaction) -> bool:
         return interaction.user.id == 822460191118721034
     return app_commands.check(predicate)
 
 def create_panel_embed():
+    """パネル表示用のEmbed生成"""
     embed = discord.Embed(
         description=(
             "🎯ｴﾛ漫画ﾙｰﾚｯﾄ\n\n"
-            "botがｴﾛ漫画を選んでくれるよ！<a:c296:1288305823323263029>\n\n"
+            "botがｴﾛ漫画を選んでくれるよ！\n\n"
             "🔵：自分の<:b431:1289782471197458495>を除外しない\n"
             "🔴：自分の<:b431:1289782471197458495>を除外する\n\n"
             "【ランダム】：全体から選ぶ\n"
@@ -247,10 +312,13 @@ def create_panel_embed():
     return embed
 
 class CombinedView(discord.ui.View):
+    """パネル上のボタンを扱うViewクラス"""
+
     def __init__(self):
         super().__init__(timeout=None)
 
     async def get_author_name(self, author_id):
+        """作者IDからユーザー名取得"""
         user = bot.get_user(author_id)
         if user is None:
             try:
@@ -260,6 +328,7 @@ class CombinedView(discord.ui.View):
         return user.display_name if user and user.display_name else (user.name if user else "不明なユーザー")
 
     async def handle_selection(self, interaction, random_message):
+        """ユーザーがボタンを押したときの結果表示"""
         try:
             if random_message:
                 last_chosen_authors[interaction.user.id] = random_message['author_id']
@@ -270,22 +339,25 @@ class CombinedView(discord.ui.View):
                 )
             else:
                 await interaction.channel.send(
-                    f"{interaction.user.mention} 条件に合う投稿が見つかりませんでした。"
+                    f"{interaction.user.mention} 条件に合う投稿が見つかりませんでした。もう一度お試しください。"
                 )
         except Exception as e:
-            logging.error(f"メッセージの取得または応答中にエラーが発生しました: {e}")
+            logging.error(f"メッセージ取得/応答中エラー: {e}")
             await interaction.channel.send(
-                f"{interaction.user.mention} 投稿を読み込む際にエラーが発生しました。しばらくしてから再試行してください。"
+                f"{interaction.user.mention} エラーが発生しました。しばらくしてから再試行してください。"
             )
-        # パネル再送呼び出しを削除し、考え中表示を減らす対応中のため変更なし
+        finally:
+            # パネルを再送信して最下部に移動させる
+            await send_panel(interaction.channel)
 
     async def get_and_handle_random_message(self, interaction, filter_func):
+        """ランダムメッセージ取得と表示"""
         try:
-            random_message = get_random_message(THREAD_ID, filter_func)
+            random_message = await get_random_message(THREAD_ID, filter_func)
             await self.handle_selection(interaction, random_message)
         except Exception as e:
-            logging.error(f"ボタン押下時にエラー: {e}")
-            await interaction.channel.send(str(e))
+            logging.error(f"ボタン押下時エラー: {e}")
+            await interaction.channel.send(f"{interaction.user.mention} 処理中にエラーが発生しました。再試行してください。")
 
     @discord.ui.button(label="ランダム", style=discord.ButtonStyle.primary, row=0)
     async def random_normal(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -304,9 +376,7 @@ class CombinedView(discord.ui.View):
         def filter_func(msg):
             if not user_reacted(msg, READ_LATER_REACTION_ID, interaction.user.id):
                 return False
-            if msg['author_id'] == interaction.user.id:
-                return False
-            if msg['author_id'] == SPECIAL_EXCLUDE_AUTHOR:
+            if msg['author_id'] == interaction.user.id or msg['author_id'] == SPECIAL_EXCLUDE_AUTHOR:
                 return False
             if last_chosen_authors.get(interaction.user.id) == msg['author_id']:
                 return False
@@ -318,9 +388,7 @@ class CombinedView(discord.ui.View):
         def filter_func(msg):
             if not user_reacted(msg, FAVORITE_REACTION_ID, interaction.user.id):
                 return False
-            if msg['author_id'] == interaction.user.id:
-                return False
-            if msg['author_id'] == SPECIAL_EXCLUDE_AUTHOR:
+            if msg['author_id'] == interaction.user.id or msg['author_id'] == SPECIAL_EXCLUDE_AUTHOR:
                 return False
             if last_chosen_authors.get(interaction.user.id) == msg['author_id']:
                 return False
@@ -332,9 +400,7 @@ class CombinedView(discord.ui.View):
         def filter_func(msg):
             if user_reacted(msg, RANDOM_EXCLUDE_REACTION_ID, interaction.user.id):
                 return False
-            if msg['author_id'] == interaction.user.id:
-                return False
-            if msg['author_id'] == SPECIAL_EXCLUDE_AUTHOR:
+            if msg['author_id'] == interaction.user.id or msg['author_id'] == SPECIAL_EXCLUDE_AUTHOR:
                 return False
             if last_chosen_authors.get(interaction.user.id) == msg['author_id']:
                 return False
@@ -348,9 +414,7 @@ class CombinedView(discord.ui.View):
                 return False
             if user_reacted(msg, RANDOM_EXCLUDE_REACTION_ID, interaction.user.id):
                 return False
-            if msg['author_id'] == interaction.user.id:
-                return False
-            if msg['author_id'] == SPECIAL_EXCLUDE_AUTHOR:
+            if msg['author_id'] == interaction.user.id or msg['author_id'] == SPECIAL_EXCLUDE_AUTHOR:
                 return False
             if last_chosen_authors.get(interaction.user.id) == msg['author_id']:
                 return False
@@ -361,63 +425,74 @@ class CombinedView(discord.ui.View):
 @bot.tree.command(name="panel")
 @is_specific_user()
 async def panel(interaction: discord.Interaction):
-    # deferを使わず、即座に応答する
+    # スラッシュコマンド実行時に即座に返信し、考え中を最小化。
+    await interaction.response.defer()
     channel = interaction.channel
     if channel is None:
-        await interaction.response.send_message("エラーが発生しました。チャンネルが特定できません。", ephemeral=True)
+        logging.error("コマンドを実行したチャンネルが取得できません。")
+        await interaction.followup.send("エラーが発生しました。チャンネルが特定できません。もう一度お試しください。", ephemeral=True)
         return
-    # 即座にメッセージを返してからパネルを送信
-    await interaction.response.send_message("パネルを表示します！", ephemeral=False)
     await send_panel(channel)
 
 @bot.tree.command(name="update_db")
 @is_specific_user()
 async def update_db(interaction: discord.Interaction):
-    # 処理が長い場合は考え中が出る可能性はあるが、
-    # とりあえず即レスし、その後followupで結果を通知
-    await interaction.response.send_message("データベースを更新しています...", ephemeral=True)
+    await interaction.response.defer(thinking=True)
     try:
         await save_all_messages_to_db()
         await interaction.followup.send("全てのメッセージをデータベースに保存しました。", ephemeral=True)
     except Exception as e:
-        logging.error(f"update_dbコマンド中にエラーが発生しました: {e}")
-        await interaction.followup.send(f"エラーが発生しました: {e}", ephemeral=True)
+        logging.error(f"update_dbコマンド中エラー: {e}")
+        await interaction.followup.send("エラーが発生しました。しばらくしてから再試行してください。", ephemeral=True)
 
 @bot.tree.error
 async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+    # コマンド実行時のエラーはユーザーに簡易メッセージを返す
     if isinstance(error, app_commands.CheckFailure):
         await interaction.response.send_message("このコマンドを実行する権限がありません。", ephemeral=True)
     else:
-        logging.error(f"Unhandled exception in an app command: {error}")
-        await interaction.response.send_message("エラーが発生しました。しばらくしてから再試行してください。", ephemeral=True)
+        logging.error(f"Unhandled app command error: {error}")
+        await interaction.response.send_message("コマンド実行中にエラーが発生しました。もう一度お試しください。", ephemeral=True)
 
 @bot.event
 async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
-    await update_reactions_in_db(payload.message_id)
+    # リアクション追加時にDBを更新して最新状態を維持
+    if payload.emoji.is_custom_emoji():
+        await update_reactions_in_db(payload.message_id, payload.emoji.id, payload.user_id, add=True)
 
 @bot.event
 async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
-    await update_reactions_in_db(payload.message_id)
+    # リアクション削除時にDBを更新して最新状態を維持
+    if payload.emoji.is_custom_emoji():
+        await update_reactions_in_db(payload.message_id, payload.emoji.id, payload.user_id, add=False)
 
 @tasks.loop(minutes=60)
 async def save_all_messages_to_db_task():
+    # 定期的にスレッドのメッセージをDBへ保存し、データ更新
     await save_all_messages_to_db()
 
+def save_all_messages_to_db_sync(limit_count=100):
+    conn = get_db_connection()
+    if not conn:
+        return
+    release_db_connection(conn)
+    # 上記は接続テスト用、以下で再取得実施
+    # (ここでは実際のメッセージ取得はasync処理が必要なので下で処理)
+
 async def save_all_messages_to_db():
+    # スレッド内の最新メッセージ最大100件をDBへ保存（更新）
     channel = bot.get_channel(THREAD_ID)
     if channel:
         try:
             limit_count = 100
             messages = []
-            count = 0
             async for message in channel.history(limit=limit_count):
                 messages.append(message)
-                count += 1
             if messages:
                 await bulk_save_messages_to_db(messages)
             logging.info(f"最大{limit_count}件のメッセージをデータベースに保存しました。")
         except discord.HTTPException as e:
-            logging.error(f"メッセージ履歴の取得中にエラーが発生しました: {e}")
+            logging.error(f"メッセージ履歴取得中エラー: {e}")
     else:
         logging.error("指定されたTHREAD_IDのチャンネルが見つかりません。")
 
@@ -427,15 +502,15 @@ async def on_ready():
     logging.info(f"Botが起動しました！ {bot.user}")
     try:
         synced = await bot.tree.sync()
-        logging.info(f"スラッシュコマンドが同期されました。: {synced}")
+        logging.info(f"スラッシュコマンドが同期されました: {synced}")
     except Exception as e:
-        logging.error(f"スラッシュコマンドの同期中にエラーが発生しました: {e}")
+        logging.error(f"スラッシュコマンド同期中エラー: {e}")
 
 if DISCORD_TOKEN:
     try:
         bot.run(DISCORD_TOKEN)
     except Exception as e:
-        logging.error(f"Bot起動中にエラーが発生しました: {e}")
+        logging.error(f"Bot起動中エラー: {e}")
         if db_pool:
             db_pool.closeall()
             logging.info("データベース接続プールをクローズしました。")
