@@ -256,7 +256,6 @@ async def get_random_message(thread_id, filter_func=None):
     return await run_in_threadpool(get_random_message_sync, thread_id, filter_func)
 
 async def safe_fetch_message(channel: discord.TextChannel, message_id: int):
-    """メッセージを安全に取得する関数"""
     try:
         message = await channel.fetch_message(message_id)
         return message
@@ -297,7 +296,6 @@ def is_specific_user():
     return app_commands.check(predicate)
 
 def create_panel_embed():
-    """参考コード通りのEmbed"""
     embed = discord.Embed(
         description=(
             "🎯ｴﾛ漫画ﾙｰﾚｯﾄ\n\n"
@@ -313,8 +311,6 @@ def create_panel_embed():
     return embed
 
 class CombinedView(discord.ui.View):
-    """参考コード通りのボタンとメッセージ表示"""
-
     def __init__(self):
         super().__init__(timeout=None)
 
@@ -328,7 +324,6 @@ class CombinedView(discord.ui.View):
         return user.display_name if user and user.display_name else (user.name if user else "不明なユーザー")
 
     async def handle_selection(self, interaction, random_message):
-        """参考コードのメッセージ表示"""
         try:
             if random_message:
                 last_chosen_authors[interaction.user.id] = random_message['author_id']
@@ -422,18 +417,23 @@ class CombinedView(discord.ui.View):
 @bot.tree.command(name="panel")
 @is_specific_user()
 async def panel(interaction: discord.Interaction):
-    await interaction.response.defer()
     channel = interaction.channel
     if channel is None:
         logging.error("コマンドを実行したチャンネルが取得できません。")
-        await interaction.followup.send("エラーが発生しました。チャンネルが特定できません。もう一度お試しください。", ephemeral=True)
+        # コマンド実行者にのみ見えるエラーメッセージ表示
+        await interaction.response.send_message("エラーが発生しました。チャンネルが特定できません。もう一度お試しください。", ephemeral=True)
         return
+
+    # 考え中を出さず、実行者にのみ見えるメッセージを即座に返す
+    await interaction.response.send_message("パネルを表示します！", ephemeral=True)
+    # その後パネルを表示
     await send_panel(channel)
 
 @bot.tree.command(name="update_db")
 @is_specific_user()
 async def update_db(interaction: discord.Interaction):
-    await interaction.response.defer(thinking=True)
+    # 考え中を出さないため、直接送信
+    await interaction.response.send_message("データベースを更新しています...", ephemeral=True)
     try:
         await save_all_messages_to_db()
         await interaction.followup.send("全てのメッセージをデータベースに保存しました。", ephemeral=True)
