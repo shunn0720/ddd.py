@@ -306,7 +306,7 @@ def create_panel_embed():
             "【あとで読む】：<:b434:1304690617405669376>を付けた投稿から選ぶ\n"
             "【お気に入り】：<:b435:1304690627723657267>を付けた投稿から選ぶ"
         ),
-        color=discord.Color.magenta()
+        color=0xFF69B4 
     )
     return embed
 
@@ -334,12 +334,12 @@ class CombinedView(discord.ui.View):
                 )
             else:
                 await interaction.channel.send(
-                    f"{interaction.user.mention} 条件に合う投稿が見つかりませんでした。もう一度お試しください。"
+                    f"{interaction.user.mention} 条件に合う投稿なかった！また後で試して。"
                 )
         except Exception as e:
             logging.error(f"メッセージ取得/応答中エラー: {e}")
             await interaction.channel.send(
-                f"{interaction.user.mention} エラーが発生しました。しばらくしてから再試行してください。"
+                f"{interaction.user.mention} エラーが発生したから、また後で試して。"
             )
         finally:
             await send_panel(interaction.channel)
