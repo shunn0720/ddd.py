@@ -297,6 +297,7 @@ async def send_panel(channel):
         logging.info(f"新しいパネルメッセージ {current_panel_message_id} を送信しました。")
     except discord.HTTPException as e:
         logging.error(f"パネルメッセージ送信中エラー: {e}")
+        current_panel_message_id = None  # 送信失敗時は current_panel_message_id をリセット
 
 def is_specific_user():
     async def predicate(interaction: discord.Interaction) -> bool:
@@ -350,7 +351,9 @@ class CombinedView(discord.ui.View):
                 f"{interaction.user.mention} エラー発生したぽいから、報告して！"
             )
         finally:
-            await send_panel(interaction.channel)
+            # パネルの再送信は、エラーが発生していない場合のみ行う
+            if not interaction.response.is_done() and not isinstance(e, Exception):
+                await send_panel(interaction.channel)
 
     async def get_and_handle_random_message(self, interaction, filter_func):
         try:
