@@ -342,12 +342,12 @@ class CombinedView(discord.ui.View):
                 )
             else:
                 await interaction.channel.send(
-                    f"{interaction.user.mention} 条件に合う投稿が見つかりませんでした。もう一度お試しください。"
+                    f"{interaction.user.mention} 条件に合う投稿なかったから、また試して！"
                 )
         except Exception as e:
             logging.error(f"メッセージ取得/応答中エラー: {e}")
             await interaction.channel.send(
-                f"{interaction.user.mention} エラーが発生しました。しばらくしてから再試行してください。"
+                f"{interaction.user.mention} エラー発生したぽいから、報告して！"
             )
         finally:
             await send_panel(interaction.channel)
