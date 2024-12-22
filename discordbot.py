@@ -110,6 +110,7 @@ SPECIAL_EXCLUDE_AUTHOR = 695096014482440244
 
 last_chosen_authors = {}
 current_panel_message_id = None
+INITIAL_LOAD_COUNT = 100
 
 async def run_in_threadpool(func, *args, **kwargs):
     loop = asyncio.get_running_loop()
@@ -279,16 +280,18 @@ async def safe_fetch_message(channel: discord.TextChannel, message_id: int):
 
 async def send_panel(channel):
     global current_panel_message_id
+    
     if current_panel_message_id:
         try:
-            panel_message = await channel.fetch_message(current_panel_message_id)
-            await panel_message.delete()
-            logging.info(f"以前のパネルメッセージ {current_panel_message_id} を削除しました。")
+            panel_message = await safe_fetch_message(channel, current_panel_message_id)
+            if panel_message:
+                await panel_message.delete()
+                logging.info(f"以前のパネルメッセージ {current_panel_message_id} を削除しました。")
         except discord.NotFound:
             logging.warning(f"以前のパネルメッセージ {current_panel_message_id} が見つかりません。")
         except discord.HTTPException as e:
             logging.error(f"パネルメッセージ削除中エラー: {e}")
-
+    
     embed = create_panel_embed()
     view = CombinedView()
     try:
@@ -297,7 +300,6 @@ async def send_panel(channel):
         logging.info(f"新しいパネルメッセージ {current_panel_message_id} を送信しました。")
     except discord.HTTPException as e:
         logging.error(f"パネルメッセージ送信中エラー: {e}")
-        current_panel_message_id = None  # 送信失敗時は current_panel_message_id をリセット
 
 def is_specific_user():
     async def predicate(interaction: discord.Interaction) -> bool:
@@ -311,9 +313,9 @@ def create_panel_embed():
             "botがｴﾛ漫画を選んでくれるよ！<a:c296:1288305823323263029>\n\n"
             "🔵：自分の<:b431:1289782471197458495>を除外しない\n"
             "🔴：自分の<:b431:1289782471197458495>を除外する\n\n"
-            "【ランダム】：全体から選ぶ\n"
-            "【あとで読む】：<:b434:1304690617405669376>を付けた投稿から選ぶ\n"
-            "【お気に入り】：<:b435:1304690627723657267>を付けた投稿から選ぶ"
+            "ランダム：全体から選ぶ\n"
+            "あとで読む：<:b434:1304690617405669376>を付けた投稿から選ぶ\n"
+            "お気に入り：<:b435:1304690627723657267>を付けた投稿から選ぶ"
         ),
         color=0xFF69B4
     )
@@ -343,17 +345,15 @@ class CombinedView(discord.ui.View):
                 )
             else:
                 await interaction.channel.send(
-                    f"{interaction.user.mention} 条件に合う投稿なかったから、また試して！"
+                    f"{interaction.user.mention} 条件に合う投稿なかったよ。"
                 )
         except Exception as e:
             logging.error(f"メッセージ取得/応答中エラー: {e}")
             await interaction.channel.send(
-                f"{interaction.user.mention} エラー発生したぽいから、報告して！"
+                f"{interaction.user.mention} エラー発生したぽいから、報告して～"
             )
         finally:
-            # パネルの再送信は、エラーが発生していない場合のみ行う
-            if not interaction.response.is_done() and not isinstance(e, Exception):
-                await send_panel(interaction.channel)
+            await send_panel(interaction.channel)
 
     async def get_and_handle_random_message(self, interaction, filter_func):
         try:
@@ -461,7 +461,7 @@ async def panel(interaction: discord.Interaction):
 async def update_db(interaction: discord.Interaction):
     await interaction.response.send_message("データベースを更新しています...", ephemeral=True)
     try:
-        await save_all_messages_to_db()
+        await save_all_messages_to_db(INITIAL_LOAD_COUNT)
         await interaction.followup.send("全てのメッセージをデータベースに保存しました。", ephemeral=True)
     except Exception as e:
         logging.error(f"update_dbコマンド中エラー: {e}")
@@ -489,23 +489,17 @@ async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
 async def save_all_messages_to_db_task():
     await save_all_messages_to_db()
 
-def save_all_messages_to_db_sync(limit_count=100):
-    conn = get_db_connection()
-    if not conn:
-        return
-    release_db_connection(conn)
 
-async def save_all_messages_to_db():
+async def save_all_messages_to_db(limit_count = None):
     channel = bot.get_channel(THREAD_ID)
     if channel:
         try:
-            limit_count = 100
             messages = []
             async for message in channel.history(limit=limit_count):
                 messages.append(message)
             if messages:
                 await bulk_save_messages_to_db(messages)
-            logging.info(f"最大{limit_count}件のメッセージをデータベースに保存しました。")
+            logging.info(f"最大{limit_count if limit_count else '全て'}件のメッセージをデータベースに保存しました。")
         except discord.HTTPException as e:
             logging.error(f"メッセージ履歴取得中エラー: {e}")
     else:
@@ -517,6 +511,7 @@ async def on_ready():
     # これによりBotが再起動してもこのViewが有効になる（ただしボタン有効期限15分は変わらない）
     bot.add_view(CombinedView())
 
+    await save_all_messages_to_db(INITIAL_LOAD_COUNT)
     save_all_messages_to_db_task.start()
     logging.info(f"Botが起動しました！ {bot.user}")
     try:
