@@ -11,6 +11,29 @@ from psycopg2.extras import DictCursor
 from dotenv import load_dotenv
 import json
 
+# ★ 変更ポイント：パネルメッセージID保存用
+PANEL_CONFIG_FILE = "panel_config.json"
+
+def save_panel_message_id(message_id: int):
+    """
+    パネルメッセージIDをjsonファイルに保存する
+    """
+    data = {"panel_message_id": message_id}
+    with open(PANEL_CONFIG_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+def load_panel_message_id() -> int | None:
+    """
+    保存されたパネルメッセージIDをjsonファイルから読み込む
+    """
+    try:
+        with open(PANEL_CONFIG_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            return data.get("panel_message_id")
+    except FileNotFoundError:
+        return None
+
+# カスタム例外
 class DatabaseQueryError(Exception):
     pass
 
@@ -108,7 +131,10 @@ FAVORITE_REACTION_ID = 1304690627723657267
 RANDOM_EXCLUDE_REACTION_ID = 1289782471197458495
 SPECIAL_EXCLUDE_AUTHOR = 695096014482440244
 
+# ボタン再送時に、前回と同じ投稿者を連続で選ばないようにする辞書
 last_chosen_authors = {}
+
+# この変数に現在のパネルメッセージIDを保持
 current_panel_message_id = None
 
 async def run_in_threadpool(func, *args, **kwargs):
@@ -125,7 +151,11 @@ def save_message_to_db_sync(message_id, author_id, content):
             cur.execute("""
             INSERT INTO messages (message_id, thread_id, author_id, reactions, content)
             VALUES (%s, %s, %s, %s, %s)
-            ON CONFLICT (message_id) DO UPDATE SET content = EXCLUDED.content
+            ON CONFLICT (message_id) DO UPDATE
+            SET thread_id = EXCLUDED.thread_id,
+                author_id = EXCLUDED.author_id,
+                reactions = EXCLUDED.reactions,
+                content = EXCLUDED.content
             """, (
                 message_id,
                 THREAD_ID,
@@ -160,7 +190,11 @@ def bulk_save_messages_to_db_sync(messages):
             cur.executemany("""
                 INSERT INTO messages (message_id, thread_id, author_id, reactions, content)
                 VALUES (%s, %s, %s, %s, %s)
-                ON CONFLICT (message_id) DO UPDATE SET content = EXCLUDED.content
+                ON CONFLICT (message_id) DO UPDATE
+                SET thread_id = EXCLUDED.thread_id,
+                    author_id = EXCLUDED.author_id,
+                    reactions = EXCLUDED.reactions,
+                    content = EXCLUDED.content
             """, data)
             conn.commit()
         logging.info(f"{len(messages)}件のメッセージをバルク挿入または更新しました。")
@@ -270,7 +304,12 @@ async def safe_fetch_message(channel: discord.TextChannel, message_id: int):
         return None
 
 async def send_panel(channel):
+    """
+    パネルメッセージを送信、または更新する関数。
+    既存のパネルがある場合は削除し、新しいパネルを作成する。
+    """
     global current_panel_message_id
+
     if current_panel_message_id:
         try:
             panel_message = await channel.fetch_message(current_panel_message_id)
@@ -283,9 +322,14 @@ async def send_panel(channel):
 
     embed = create_panel_embed()
     view = CombinedView()
+
     try:
         sent_message = await channel.send(embed=embed, view=view)
         current_panel_message_id = sent_message.id
+
+        # ★ 変更ポイント: 新しいパネルメッセージIDを保存
+        save_panel_message_id(current_panel_message_id)
+
         logging.info(f"新しいパネルメッセージ {current_panel_message_id} を送信しました。")
     except discord.HTTPException as e:
         logging.error(f"パネルメッセージ送信中エラー: {e}")
@@ -311,7 +355,12 @@ def create_panel_embed():
     return embed
 
 class CombinedView(discord.ui.View):
+    """
+    メインのボタンを定義するViewクラス
+    persistent view のため、custom_id を必ず指定する
+    """
     def __init__(self):
+        # timeout=None: Botが起動している限り有効
         super().__init__(timeout=None)
 
     async def get_author_name(self, author_id):
@@ -321,9 +370,17 @@ class CombinedView(discord.ui.View):
                 user = await bot.fetch_user(author_id)
             except discord.NotFound:
                 user = None
-        return user.display_name if user and user.display_name else (user.name if user else "不明なユーザー")
+        if user and user.display_name:
+            return user.display_name
+        elif user:
+            return user.name
+        else:
+            return "不明なユーザー"
 
     async def handle_selection(self, interaction, random_message):
+        """
+        メッセージを見つけてユーザーに案内する共通処理
+        """
         try:
             if random_message:
                 last_chosen_authors[interaction.user.id] = random_message['author_id']
@@ -334,74 +391,90 @@ class CombinedView(discord.ui.View):
                 )
             else:
                 await interaction.channel.send(
-                    f"{interaction.user.mention} 条件に合う投稿なかった！また後で試して。"
+                    f"{interaction.user.mention} 条件に合う投稿なかったから、リアクション確認してみて！"
                 )
         except Exception as e:
             logging.error(f"メッセージ取得/応答中エラー: {e}")
             await interaction.channel.send(
-                f"{interaction.user.mention} エラーが発生したから、また後で試して。"
+                f"{interaction.user.mention} エラー出たぽいから、また後で試して。"
             )
         finally:
+            # ボタン押下後に古いパネルを消して、新しいパネルを再送
             await send_panel(interaction.channel)
 
     async def get_and_handle_random_message(self, interaction, filter_func):
         try:
+            await interaction.response.defer()
             random_message = await get_random_message(THREAD_ID, filter_func)
             await self.handle_selection(interaction, random_message)
         except Exception as e:
             logging.error(f"ボタン押下時エラー: {e}")
-            await interaction.channel.send(f"{interaction.user.mention} 処理中にエラーが発生しました。再試行してください。")
+            await interaction.followup.send(f"{interaction.user.mention} 処理中にエラーが発生しました。再試行してください。")
 
-    @discord.ui.button(label="ランダム", style=discord.ButtonStyle.primary, row=0)
+    # ★ custom_id を明示的に指定することで、Persistent View が機能する
+    @discord.ui.button(label="ランダム", style=discord.ButtonStyle.primary, row=0, custom_id="random_normal_button")
     async def random_normal(self, interaction: discord.Interaction, button: discord.ui.Button):
+        bot_id = bot.user.id
         def filter_func(msg):
             if msg['author_id'] == interaction.user.id:
                 return False
             if msg['author_id'] == SPECIAL_EXCLUDE_AUTHOR:
                 return False
+            if msg['author_id'] == bot_id:
+                return False
             if last_chosen_authors.get(interaction.user.id) == msg['author_id']:
                 return False
             return True
         await self.get_and_handle_random_message(interaction, filter_func)
 
-    @discord.ui.button(label="あとで読む", style=discord.ButtonStyle.primary, row=0)
+    @discord.ui.button(label="あとで読む", style=discord.ButtonStyle.primary, row=0, custom_id="read_later_button")
     async def read_later(self, interaction: discord.Interaction, button: discord.ui.Button):
+        bot_id = bot.user.id
         def filter_func(msg):
             if not user_reacted(msg, READ_LATER_REACTION_ID, interaction.user.id):
                 return False
             if msg['author_id'] == interaction.user.id or msg['author_id'] == SPECIAL_EXCLUDE_AUTHOR:
                 return False
+            if msg['author_id'] == bot_id:
+                return False
             if last_chosen_authors.get(interaction.user.id) == msg['author_id']:
                 return False
             return True
         await self.get_and_handle_random_message(interaction, filter_func)
 
-    @discord.ui.button(label="お気に入り", style=discord.ButtonStyle.primary, row=0)
+    @discord.ui.button(label="お気に入り", style=discord.ButtonStyle.primary, row=0, custom_id="favorite_button")
     async def favorite(self, interaction: discord.Interaction, button: discord.ui.Button):
+        bot_id = bot.user.id
         def filter_func(msg):
             if not user_reacted(msg, FAVORITE_REACTION_ID, interaction.user.id):
                 return False
             if msg['author_id'] == interaction.user.id or msg['author_id'] == SPECIAL_EXCLUDE_AUTHOR:
                 return False
+            if msg['author_id'] == bot_id:
+                return False
             if last_chosen_authors.get(interaction.user.id) == msg['author_id']:
                 return False
             return True
         await self.get_and_handle_random_message(interaction, filter_func)
 
-    @discord.ui.button(label="ランダム", style=discord.ButtonStyle.danger, row=1)
+    @discord.ui.button(label="ランダム", style=discord.ButtonStyle.danger, row=1, custom_id="random_exclude_button")
     async def random_exclude(self, interaction: discord.Interaction, button: discord.ui.Button):
+        bot_id = bot.user.id
         def filter_func(msg):
             if user_reacted(msg, RANDOM_EXCLUDE_REACTION_ID, interaction.user.id):
                 return False
             if msg['author_id'] == interaction.user.id or msg['author_id'] == SPECIAL_EXCLUDE_AUTHOR:
                 return False
+            if msg['author_id'] == bot_id:
+                return False
             if last_chosen_authors.get(interaction.user.id) == msg['author_id']:
                 return False
             return True
         await self.get_and_handle_random_message(interaction, filter_func)
 
-    @discord.ui.button(label="あとで読む", style=discord.ButtonStyle.danger, row=1)
+    @discord.ui.button(label="あとで読む", style=discord.ButtonStyle.danger, row=1, custom_id="conditional_read_button")
     async def conditional_read(self, interaction: discord.Interaction, button: discord.ui.Button):
+        bot_id = bot.user.id
         def filter_func(msg):
             if not user_reacted(msg, READ_LATER_REACTION_ID, interaction.user.id):
                 return False
@@ -409,10 +482,13 @@ class CombinedView(discord.ui.View):
                 return False
             if msg['author_id'] == interaction.user.id or msg['author_id'] == SPECIAL_EXCLUDE_AUTHOR:
                 return False
+            if msg['author_id'] == bot_id:
+                return False
             if last_chosen_authors.get(interaction.user.id) == msg['author_id']:
                 return False
             return True
         await self.get_and_handle_random_message(interaction, filter_func)
+
 
 @bot.tree.command(name="panel")
 @is_specific_user()
@@ -420,19 +496,15 @@ async def panel(interaction: discord.Interaction):
     channel = interaction.channel
     if channel is None:
         logging.error("コマンドを実行したチャンネルが取得できません。")
-        # コマンド実行者にのみ見えるエラーメッセージ表示
         await interaction.response.send_message("エラーが発生しました。チャンネルが特定できません。もう一度お試しください。", ephemeral=True)
         return
 
-    # 考え中を出さず、実行者にのみ見えるメッセージを即座に返す
     await interaction.response.send_message("パネルを表示します！", ephemeral=True)
-    # その後パネルを表示
     await send_panel(channel)
 
 @bot.tree.command(name="update_db")
 @is_specific_user()
 async def update_db(interaction: discord.Interaction):
-    # 考え中を出さないため、直接送信
     await interaction.response.send_message("データベースを更新しています...", ephemeral=True)
     try:
         await save_all_messages_to_db()
@@ -470,6 +542,9 @@ def save_all_messages_to_db_sync(limit_count=100):
     release_db_connection(conn)
 
 async def save_all_messages_to_db():
+    """
+    スレッド(THREAD_ID)の最新の100件メッセージを取得し、DBへ保存する
+    """
     channel = bot.get_channel(THREAD_ID)
     if channel:
         try:
@@ -487,7 +562,21 @@ async def save_all_messages_to_db():
 
 @bot.event
 async def on_ready():
+    """
+    Bot起動時に呼ばれるイベントハンドラ
+    ここでPersistent Viewを再登録し、再起動後でもボタンが有効になるようにする
+    """
+    # Viewの登録
+    # ★ 変更ポイント: 前回送信したパネルメッセージIDを読み込み
+    stored_panel_message_id = load_panel_message_id()
+    if stored_panel_message_id:
+        # Persistent View: 同じ message_id に対して View を再登録
+        bot.add_view(CombinedView(), message_id=stored_panel_message_id)
+        logging.info(f"メッセージID {stored_panel_message_id} に紐付くViewを再登録しました。")
+
+    # ループタスク開始
     save_all_messages_to_db_task.start()
+
     logging.info(f"Botが起動しました！ {bot.user}")
     try:
         synced = await bot.tree.sync()
