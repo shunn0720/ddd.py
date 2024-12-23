@@ -222,14 +222,27 @@ def update_reactions_in_db_sync(message_id, emoji_id, user_id, add=True):
 async def update_reactions_in_db(message_id, emoji_id, user_id, add=True):
     await run_in_threadpool(update_reactions_in_db_sync, message_id, emoji_id, user_id, add)
 
+import json
+
 def user_reacted(msg, reaction_id, user_id):
-    reaction_data = msg['reactions']
+    reaction_data = msg.get('reactions')
     if reaction_data is None:
-        reaction_data = {}
-    elif isinstance(reaction_data, str):
-        reaction_data = json.loads(reaction_data)
+        return False
+
+    if isinstance(reaction_data, str):
+        try:
+            reaction_data = json.loads(reaction_data)
+        except json.JSONDecodeError:
+            logging.error(f"JSONデコードエラー: {reaction_data}")
+            return False
+
+    if not isinstance(reaction_data, dict):
+        logging.error(f"不正なreactionsデータ: {reaction_data}")
+        return False
+
     users = reaction_data.get(str(reaction_id), [])
     return user_id in users
+
 
 def get_random_message_sync(thread_id, filter_func=None):
     conn = get_db_connection()
@@ -307,7 +320,7 @@ def create_panel_embed():
     embed = discord.Embed(
         title="🎯ｴﾛ漫画ﾙｰﾚｯﾄ",
         description=(
-            "botがｴﾛ漫画を選んでくれるよ！<a:c296:1288305823323263029>\n\n"
+            "botがｴﾛ漫画を選んでくれるよ！\n\n"
             "🔵：自分の<:b431:1289782471197458495>を除外しない\n"
             "🔴：自分の<:b431:1289782471197458495>を除外する\n\n"
             "ランダム：全体から選ぶ\n"
@@ -320,7 +333,7 @@ def create_panel_embed():
 
 class CombinedView(discord.ui.View):
     def __init__(self):
-        super().__init__(timeout=None)  # ここで timeout=None を設定
+        super().__init__(timeout=None)
 
     async def get_author_name(self, author_id):
         user = bot.get_user(author_id)
@@ -497,7 +510,7 @@ async def save_all_messages_to_db():
     if channel:
         try:
             messages = []
-            async for message in channel.history(limit=None):  # limit=None で全件取得
+            async for message in channel.history(limit=None):
                 messages.append(message)
             if messages:
                 await bulk_save_messages_to_db(messages)
