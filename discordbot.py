@@ -125,7 +125,6 @@ def save_message_to_db_sync(message_id, author_id, content):
             cur.execute("""
             INSERT INTO messages (message_id, thread_id, author_id, reactions, content)
             VALUES (%s, %s, %s, %s, %s)
-            ON CONFLICT (message_id) DO UPDATE SET content = EXCLUDED.content
             ON CONFLICT (message_id) DO UPDATE
             SET thread_id = EXCLUDED.thread_id,
                 author_id = EXCLUDED.author_id,
@@ -165,7 +164,6 @@ def bulk_save_messages_to_db_sync(messages):
             cur.executemany("""
                 INSERT INTO messages (message_id, thread_id, author_id, reactions, content)
                 VALUES (%s, %s, %s, %s, %s)
-                ON CONFLICT (message_id) DO UPDATE SET content = EXCLUDED.content
                 ON CONFLICT (message_id) DO UPDATE
                 SET thread_id = EXCLUDED.thread_id,
                     author_id = EXCLUDED.author_id,
@@ -334,7 +332,6 @@ class CombinedView(discord.ui.View):
         return user.display_name if user and user.display_name else (user.name if user else "不明なユーザー")
 
     async def handle_selection(self, interaction, random_message):
-        last_chosen_authors.clear() # この行を追加
         try:
             if random_message:
                 last_chosen_authors[interaction.user.id] = random_message['author_id']
@@ -350,7 +347,7 @@ class CombinedView(discord.ui.View):
         except Exception as e:
             logging.error(f"メッセージ取得/応答中エラー: {e}")
             await interaction.channel.send(
-                 f"{interaction.user.mention} エラーが発生したから、また後で試して。"
+                f"{interaction.user.mention} エラーが発生したから、また後で試して。"
             )
         finally:
             await send_panel(interaction.channel)
@@ -370,14 +367,21 @@ class CombinedView(discord.ui.View):
     async def random_normal(self, interaction: discord.Interaction, button: discord.ui.Button):
         bot_id = bot.user.id
         def filter_func(msg):
+            logging.info(f"メッセージID: {msg['message_id']}, 作者ID: {msg['author_id']}, リアクション: {msg.get('reactions')}")
+            logging.info(f"user_reacted に渡す直前のmsg: {msg}")
             if msg['author_id'] == interaction.user.id:
+                logging.info(f"  除外理由: 自分の投稿")
                 return False
             if msg['author_id'] == SPECIAL_EXCLUDE_AUTHOR:
+                logging.info(f"  除外理由: 特定の投稿者")
                 return False
             if msg['author_id'] == bot_id:
+                logging.info(f"  除外理由: Botの投稿")
                 return False
             if last_chosen_authors.get(interaction.user.id) == msg['author_id']:
+                logging.info(f"  除外理由: 前回選んだ投稿者")
                 return False
+            logging.info(f"  結果: 選択候補")
             return True
         await self.get_and_handle_random_message(interaction, filter_func)
 
@@ -385,29 +389,47 @@ class CombinedView(discord.ui.View):
     async def read_later(self, interaction: discord.Interaction, button: discord.ui.Button):
         bot_id = bot.user.id
         def filter_func(msg):
-            if not user_reacted(msg, READ_LATER_REACTION_ID, interaction.user.id):
+             logging.info(f"メッセージID: {msg['message_id']}, 作者ID: {msg['author_id']}, リアクション: {msg.get('reactions')}")
+             logging.info(f"user_reacted に渡す直前のmsg: {msg}")
+             reacted = user_reacted(msg, READ_LATER_REACTION_ID, interaction.user.id)
+             logging.info(f"READ_LATER_REACTION_ID に対する user_reacted の結果: {reacted}, reaction_id={READ_LATER_REACTION_ID}, user_id={interaction.user.id}")
+             if not reacted:
+                logging.info(f"  除外理由: あとで読むリアクションがない")
                 return False
-            if msg['author_id'] == interaction.user.id or msg['author_id'] == SPECIAL_EXCLUDE_AUTHOR:
+             if msg['author_id'] == interaction.user.id or msg['author_id'] == SPECIAL_EXCLUDE_AUTHOR:
+                logging.info(f"  除外理由: 自分の投稿または特定の投稿者")
                 return False
-            if msg['author_id'] == bot_id:
+             if msg['author_id'] == bot_id:
+                 logging.info(f"  除外理由: Botの投稿")
+                 return False
+             if last_chosen_authors.get(interaction.user.id) == msg['author_id']:
+                logging.info(f"  除外理由: 前回選んだ投稿者")
                 return False
-            if last_chosen_authors.get(interaction.user.id) == msg['author_id']:
-                return False
-            return True
+             logging.info(f"  結果: 選択候補")
+             return True
         await self.get_and_handle_random_message(interaction, filter_func)
 
     @discord.ui.button(label="お気に入り", style=discord.ButtonStyle.primary, row=0, custom_id="favorite")
     async def favorite(self, interaction: discord.Interaction, button: discord.ui.Button):
         bot_id = bot.user.id
         def filter_func(msg):
-            if not user_reacted(msg, FAVORITE_REACTION_ID, interaction.user.id):
-                return False
+            logging.info(f"メッセージID: {msg['message_id']}, 作者ID: {msg['author_id']}, リアクション: {msg.get('reactions')}")
+            logging.info(f"user_reacted に渡す直前のmsg: {msg}")
+            reacted = user_reacted(msg, FAVORITE_REACTION_ID, interaction.user.id)
+            logging.info(f"FAVORITE_REACTION_ID に対する user_reacted の結果: {reacted}, reaction_id={FAVORITE_REACTION_ID}, user_id={interaction.user.id}")
+            if not reacted:
+                 logging.info(f"  除外理由: お気に入りリアクションがない")
+                 return False
             if msg['author_id'] == interaction.user.id or msg['author_id'] == SPECIAL_EXCLUDE_AUTHOR:
+                logging.info(f"  除外理由: 自分の投稿または特定の投稿者")
                 return False
             if msg['author_id'] == bot_id:
-                return False
+                 logging.info(f"  除外理由: Botの投稿")
+                 return False
             if last_chosen_authors.get(interaction.user.id) == msg['author_id']:
+                logging.info(f"  除外理由: 前回選んだ投稿者")
                 return False
+            logging.info(f"  結果: 選択候補")
             return True
         await self.get_and_handle_random_message(interaction, filter_func)
 
@@ -415,14 +437,23 @@ class CombinedView(discord.ui.View):
     async def random_exclude(self, interaction: discord.Interaction, button: discord.ui.Button):
         bot_id = bot.user.id
         def filter_func(msg):
-            if user_reacted(msg, RANDOM_EXCLUDE_REACTION_ID, interaction.user.id):
+            logging.info(f"メッセージID: {msg['message_id']}, 作者ID: {msg['author_id']}, リアクション: {msg.get('reactions')}")
+            logging.info(f"user_reacted に渡す直前のmsg: {msg}")
+            reacted = user_reacted(msg, RANDOM_EXCLUDE_REACTION_ID, interaction.user.id)
+            logging.info(f"RANDOM_EXCLUDE_REACTION_ID に対する user_reacted の結果: {reacted}, reaction_id={RANDOM_EXCLUDE_REACTION_ID}, user_id={interaction.user.id}")
+            if reacted:
+                logging.info(f"  除外理由: 除外リアクションがある")
                 return False
             if msg['author_id'] == interaction.user.id or msg['author_id'] == SPECIAL_EXCLUDE_AUTHOR:
+                logging.info(f"  除外理由: 自分の投稿または特定の投稿者")
                 return False
             if msg['author_id'] == bot_id:
+                logging.info(f"  除外理由: Botの投稿")
                 return False
             if last_chosen_authors.get(interaction.user.id) == msg['author_id']:
+                logging.info(f"  除外理由: 前回選んだ投稿者")
                 return False
+            logging.info(f"  結果: 選択候補")
             return True
         await self.get_and_handle_random_message(interaction, filter_func)
 
@@ -430,16 +461,28 @@ class CombinedView(discord.ui.View):
     async def conditional_read(self, interaction: discord.Interaction, button: discord.ui.Button):
         bot_id = bot.user.id
         def filter_func(msg):
-            if not user_reacted(msg, READ_LATER_REACTION_ID, interaction.user.id):
+            logging.info(f"メッセージID: {msg['message_id']}, 作者ID: {msg['author_id']}, リアクション: {msg.get('reactions')}")
+            logging.info(f"user_reacted に渡す直前のmsg: {msg}")
+            reacted = user_reacted(msg, READ_LATER_REACTION_ID, interaction.user.id)
+            logging.info(f"READ_LATER_REACTION_ID に対する user_reacted の結果: {reacted}, reaction_id={READ_LATER_REACTION_ID}, user_id={interaction.user.id}")
+            if not reacted:
+                logging.info(f"  除外理由: あとで読むリアクションがない")
                 return False
-            if user_reacted(msg, RANDOM_EXCLUDE_REACTION_ID, interaction.user.id):
+            reacted = user_reacted(msg, RANDOM_EXCLUDE_REACTION_ID, interaction.user.id)
+            logging.info(f"RANDOM_EXCLUDE_REACTION_ID に対する user_reacted の結果: {reacted}, reaction_id={RANDOM_EXCLUDE_REACTION_ID}, user_id={interaction.user.id}")
+            if reacted:
+                logging.info(f"  除外理由: 除外リアクションがある")
                 return False
             if msg['author_id'] == interaction.user.id or msg['author_id'] == SPECIAL_EXCLUDE_AUTHOR:
-                return False
+                 logging.info(f"  除外理由: 自分の投稿または特定の投稿者")
+                 return False
             if msg['author_id'] == bot_id:
+                logging.info(f"  除外理由: Botの投稿")
                 return False
             if last_chosen_authors.get(interaction.user.id) == msg['author_id']:
+                logging.info(f"  除外理由: 前回選んだ投稿者")
                 return False
+            logging.info(f"  結果: 選択候補")
             return True
         await self.get_and_handle_random_message(interaction, filter_func)
 
