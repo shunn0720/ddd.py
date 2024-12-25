@@ -230,10 +230,11 @@ def user_reacted(msg, reaction_id, user_id):
        try:
           reaction_data = json.loads(reaction_data)
        except json.JSONDecodeError:
-            logging.error(f"JSONデコードエラー: {reaction_data}")
-            return False
+          logging.error(f"JSONデコードエラー: {reaction_data}")
+          return False
     users = reaction_data.get(str(reaction_id), [])
     return user_id in users
+
 
 def get_random_message_sync(thread_id, filter_func=None):
     conn = get_db_connection()
@@ -246,14 +247,15 @@ def get_random_message_sync(thread_id, filter_func=None):
             processed_messages = []
             for m in messages:
                 if m['reactions'] is None:
-                    m['reactions'] = {}
+                  m['reactions'] = {}
                 elif isinstance(m['reactions'], str):
-                   try:
-                      m['reactions'] = json.loads(m['reactions']) or {}
-                   except json.JSONDecodeError:
-                      logging.error(f"JSONデコードエラー: {m['reactions']}")
-                      m['reactions'] = {}
-                processed_messages.append(m)
+                    try:
+                      m['reactions'] = json.loads(m['reactions'])
+                    except json.JSONDecodeError:
+                        logging.error(f"JSONデコードエラー: {m['reactions']}")
+                        m['reactions'] = {}
+                processed_messages.append([m["id"],m["message_id"],m["thread_id"],m["author_id"],m['reactions'],m["content"]])
+
             if filter_func:
                 messages = [m for m in processed_messages if filter_func(m)]
             if not messages:
