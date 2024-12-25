@@ -77,7 +77,7 @@ def initialize_db():
                 message_id BIGINT NOT NULL UNIQUE,
                 thread_id BIGINT NOT NULL,
                 author_id BIGINT NOT NULL,
-                reactions JSONB,
+                reactions JSONB DEFAULT '{}'::jsonb,
                 content TEXT
             )
             """)
@@ -120,15 +120,20 @@ def save_message_to_db_sync(message_id, author_id, content):
     if not conn:
         return
     try:
-        reactions_json = json.dumps({})
         with conn.cursor() as cur:
+            # 既存のリアクションデータを保持する
+            cur.execute("SELECT reactions FROM messages WHERE message_id = %s", (message_id,))
+            row = cur.fetchone()
+            if row and row[0]:
+                reactions_json = row[0]
+            else:
+                reactions_json = json.dumps({})
             cur.execute("""
             INSERT INTO messages (message_id, thread_id, author_id, reactions, content)
             VALUES (%s, %s, %s, %s, %s)
             ON CONFLICT (message_id) DO UPDATE
             SET thread_id = EXCLUDED.thread_id,
                 author_id = EXCLUDED.author_id,
-                reactions = EXCLUDED.reactions,
                 content = EXCLUDED.content
             """, (
                 message_id,
@@ -157,7 +162,14 @@ def bulk_save_messages_to_db_sync(messages):
     try:
         data = []
         for message in messages:
-            reactions_json = json.dumps({})
+            # 既存のリアクションデータを保持する
+            with conn.cursor() as cur:
+                cur.execute("SELECT reactions FROM messages WHERE message_id = %s", (message.id,))
+                row = cur.fetchone()
+                if row and row[0]:
+                    reactions_json = row[0]
+                else:
+                    reactions_json = json.dumps({})
             data.append((message.id, THREAD_ID, message.author.id, reactions_json, message.content))
 
         with conn.cursor() as cur:
@@ -167,7 +179,6 @@ def bulk_save_messages_to_db_sync(messages):
                 ON CONFLICT (message_id) DO UPDATE
                 SET thread_id = EXCLUDED.thread_id,
                     author_id = EXCLUDED.author_id,
-                    reactions = EXCLUDED.reactions,
                     content = EXCLUDED.content
             """, data)
             conn.commit()
@@ -193,19 +204,26 @@ def update_reactions_in_db_sync(message_id, emoji_id, user_id, add=True):
             cur.execute("SELECT reactions FROM messages WHERE message_id = %s", (message_id,))
             row = cur.fetchone()
             if not row:
+                logging.warning(f"メッセージID {message_id} がデータベースに存在しません。リアクションを無視します。")
                 return
             reactions = row['reactions'] or {}
             if isinstance(reactions, str):
-                reactions = json.loads(reactions)
+                try:
+                    reactions = json.loads(reactions)
+                except json.JSONDecodeError:
+                    logging.error(f"JSONデコードエラー: {reactions}")
+                    return
             str_emoji_id = str(emoji_id)
             user_list = reactions.get(str_emoji_id, [])
 
             if add:
                 if user_id not in user_list:
                     user_list.append(user_id)
+                    logging.info(f"リアクション追加: message_id={message_id}, emoji_id={emoji_id}, user_id={user_id}")
             else:
                 if user_id in user_list:
                     user_list.remove(user_id)
+                    logging.info(f"リアクション削除: message_id={message_id}, emoji_id={emoji_id}, user_id={user_id}")
 
             reactions[str_emoji_id] = user_list
             cur.execute("UPDATE messages SET reactions = %s WHERE message_id = %s", (json.dumps(reactions), message_id))
@@ -223,17 +241,30 @@ async def update_reactions_in_db(message_id, emoji_id, user_id, add=True):
     await run_in_threadpool(update_reactions_in_db_sync, message_id, emoji_id, user_id, add)
 
 def user_reacted(msg, reaction_id, user_id):
-    reaction_data = msg.get('reactions') if isinstance(msg, dict) else msg[4]
-    if reaction_data is None:
+    """特定のリアクションに対してユーザーが反応しているかを判定する"""
+    if isinstance(msg, dict):
+        reaction_data = msg.get('reactions', {})
+    else:
+        reaction_data = msg[4]  # タプルの4番目に reactions が格納されている想定
+
+    # リアクションデータが空または None の場合
+    if not reaction_data:
         return False
-    elif isinstance(reaction_data, str) and reaction_data:
+
+    # reactions が文字列なら JSON デコードを試みる
+    if isinstance(reaction_data, str):
         try:
             reaction_data = json.loads(reaction_data)
         except json.JSONDecodeError:
             logging.error(f"JSONデコードエラー: {reaction_data}")
             return False
-    else:
-       return False
+
+    # reactions が辞書型でない場合
+    if not isinstance(reaction_data, dict):
+        logging.error(f"reaction_data が dict ではありません: {reaction_data}")
+        return False
+
+    # ユーザーが特定のリアクションを付けているか判定
     users = reaction_data.get(str(reaction_id), [])
     return user_id in users
 
@@ -252,8 +283,8 @@ def get_random_message_sync(thread_id, filter_func=None):
                     try:
                         m['reactions'] = json.loads(m['reactions'])
                     except json.JSONDecodeError:
-                         logging.error(f"JSONデコードエラー: {m['reactions']}")
-                         m['reactions'] = {}
+                        logging.error(f"JSONデコードエラー: {m['reactions']}")
+                        m['reactions'] = {}
             if filter_func:
                 messages = [m for m in messages if filter_func(m)]
             if not messages:
@@ -351,12 +382,12 @@ class CombinedView(discord.ui.View):
                 )
             else:
                 await interaction.channel.send(
-                    f"{interaction.user.mention} 条件に合う投稿なかった！また後で試して。"
+                    f"{interaction.user.mention} 条件に合う投稿がありませんでした！また後で試してね。"
                 )
         except Exception as e:
             logging.error(f"メッセージ取得/応答中エラー: {e}")
             await interaction.channel.send(
-                f"{interaction.user.mention} エラーが発生したから、また後で試して。"
+                f"{interaction.user.mention} エラーが発生したため、また後で試してね。"
             )
         finally:
             await send_panel(interaction.channel)
@@ -365,12 +396,11 @@ class CombinedView(discord.ui.View):
         try:
             await interaction.response.defer()
             random_message = await get_random_message(THREAD_ID, filter_func)
-            # 応答はすでにdefer済みなのでfollowupかchannel.sendで送る
             # handle_selection内でchannel.sendを利用
             await self.handle_selection(interaction, random_message)
         except Exception as e:
             logging.error(f"ボタン押下時エラー: {e}")
-            await interaction.followup.send(f"{interaction.user.mention} 処理中にエラーが発生しました。再試行してください。")
+            await interaction.followup.send(f"{interaction.user.mention} 処理中にエラーが発生しました。再試行してください。", ephemeral=True)
 
     @discord.ui.button(label="ランダム", style=discord.ButtonStyle.primary, row=0, custom_id="random_normal")
     async def random_normal(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -409,8 +439,8 @@ class CombinedView(discord.ui.View):
                 logging.info(f"  除外理由: 自分の投稿または特定の投稿者")
                 return False
             if msg['author_id'] == bot_id:
-                 logging.info(f"  除外理由: Botの投稿")
-                 return False
+                logging.info(f"  除外理由: Botの投稿")
+                return False
             if last_chosen_authors.get(interaction.user.id) == msg['author_id']:
                 logging.info(f"  除外理由: 前回選んだ投稿者")
                 return False
@@ -427,14 +457,14 @@ class CombinedView(discord.ui.View):
             reacted = user_reacted(msg, FAVORITE_REACTION_ID, interaction.user.id)
             logging.info(f"FAVORITE_REACTION_ID に対する user_reacted の結果: {reacted}, reaction_id={FAVORITE_REACTION_ID}, user_id={interaction.user.id}")
             if not reacted:
-                 logging.info(f"  除外理由: お気に入りリアクションがない")
-                 return False
+                logging.info(f"  除外理由: お気に入りリアクションがない")
+                return False
             if msg['author_id'] == interaction.user.id or msg['author_id'] == SPECIAL_EXCLUDE_AUTHOR:
                 logging.info(f"  除外理由: 自分の投稿または特定の投稿者")
                 return False
             if msg['author_id'] == bot_id:
-                 logging.info(f"  除外理由: Botの投稿")
-                 return False
+                logging.info(f"  除外理由: Botの投稿")
+                return False
             if last_chosen_authors.get(interaction.user.id) == msg['author_id']:
                 logging.info(f"  除外理由: 前回選んだ投稿者")
                 return False
@@ -442,7 +472,7 @@ class CombinedView(discord.ui.View):
             return True
         await self.get_and_handle_random_message(interaction, filter_func)
 
-    @discord.ui.button(label="ランダム", style=discord.ButtonStyle.danger, row=1, custom_id="random_exclude")
+    @discord.ui.button(label="ランダム除外", style=discord.ButtonStyle.danger, row=1, custom_id="random_exclude")
     async def random_exclude(self, interaction: discord.Interaction, button: discord.ui.Button):
         bot_id = bot.user.id
         def filter_func(msg):
@@ -466,7 +496,7 @@ class CombinedView(discord.ui.View):
             return True
         await self.get_and_handle_random_message(interaction, filter_func)
 
-    @discord.ui.button(label="あとで読む", style=discord.ButtonStyle.danger, row=1, custom_id="conditional_read")
+    @discord.ui.button(label="条件付きあとで読む", style=discord.ButtonStyle.danger, row=1, custom_id="conditional_read")
     async def conditional_read(self, interaction: discord.Interaction, button: discord.ui.Button):
         bot_id = bot.user.id
         def filter_func(msg):
@@ -481,8 +511,8 @@ class CombinedView(discord.ui.View):
                 logging.info(f"  除外理由: 除外リアクションがある")
                 return False
             if msg['author_id'] == interaction.user.id or msg['author_id'] == SPECIAL_EXCLUDE_AUTHOR:
-                 logging.info(f"  除外理由: 自分の投稿または特定の投稿者")
-                 return False
+                logging.info(f"  除外理由: 自分の投稿または特定の投稿者")
+                return False
             if msg['author_id'] == bot_id:
                 logging.info(f"  除外理由: Botの投稿")
                 return False
@@ -529,23 +559,19 @@ async def on_app_command_error(interaction: discord.Interaction, error: app_comm
 
 @bot.event
 async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
+    logging.info(f"リアクション追加: message_id={payload.message_id}, emoji_id={payload.emoji.id}, user_id={payload.user_id}")
     if payload.emoji.is_custom_emoji():
         await update_reactions_in_db(payload.message_id, payload.emoji.id, payload.user_id, add=True)
 
 @bot.event
 async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
+    logging.info(f"リアクション削除: message_id={payload.message_id}, emoji_id={payload.emoji.id}, user_id={payload.user_id}")
     if payload.emoji.is_custom_emoji():
         await update_reactions_in_db(payload.message_id, payload.emoji.id, payload.user_id, add=False)
 
 @tasks.loop(minutes=60)
 async def save_all_messages_to_db_task():
     await save_all_messages_to_db()
-
-def save_all_messages_to_db_sync(limit_count=100):
-    conn = get_db_connection()
-    if not conn:
-        return
-    release_db_connection(conn)
 
 async def save_all_messages_to_db():
     channel = bot.get_channel(THREAD_ID)
