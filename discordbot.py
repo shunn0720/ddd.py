@@ -228,15 +228,14 @@ def user_reacted(msg, reaction_id, user_id):
         return False
     elif isinstance(reaction_data, str) and reaction_data:
         try:
-           reaction_data = json.loads(reaction_data)
+            reaction_data = json.loads(reaction_data)
         except json.JSONDecodeError:
-          logging.error(f"JSONデコードエラー: {reaction_data}")
-          return False
+            logging.error(f"JSONデコードエラー: {reaction_data}")
+            return False
     else:
-      return False
+       return False
     users = reaction_data.get(str(reaction_id), [])
     return user_id in users
-
 
 def get_random_message_sync(thread_id, filter_func=None):
     conn = get_db_connection()
@@ -246,19 +245,17 @@ def get_random_message_sync(thread_id, filter_func=None):
         with conn.cursor(cursor_factory=DictCursor) as cur:
             cur.execute("SELECT * FROM messages WHERE thread_id = %s", (thread_id,))
             messages = cur.fetchall()
-            processed_messages = []
             for m in messages:
-              if m['reactions'] is None:
-                m['reactions'] = {}
-              elif isinstance(m['reactions'], str):
-                try:
-                   m['reactions'] = json.loads(m['reactions'])
-                except json.JSONDecodeError:
-                   logging.error(f"JSONデコードエラー: {m['reactions']}")
-                   m['reactions'] = {}
-              processed_messages.append(m)
+                if m['reactions'] is None:
+                    m['reactions'] = {}
+                elif isinstance(m['reactions'], str):
+                    try:
+                        m['reactions'] = json.loads(m['reactions'])
+                    except json.JSONDecodeError:
+                         logging.error(f"JSONデコードエラー: {m['reactions']}")
+                         m['reactions'] = {}
             if filter_func:
-                messages = [m for m in processed_messages if filter_func(m)]
+                messages = [m for m in messages if filter_func(m)]
             if not messages:
                 return None
             return random.choice(messages)
