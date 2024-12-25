@@ -228,13 +228,12 @@ def user_reacted(msg, reaction_id, user_id):
         reaction_data = {}
     elif isinstance(reaction_data, str):
         try:
-          reaction_data = json.loads(reaction_data)
+            reaction_data = json.loads(reaction_data)
         except json.JSONDecodeError:
             logging.error(f"JSONデコードエラー: {reaction_data}")
             return False
     users = reaction_data.get(str(reaction_id), [])
     return user_id in users
-
 
 def get_random_message_sync(thread_id, filter_func=None):
     conn = get_db_connection()
@@ -249,12 +248,13 @@ def get_random_message_sync(thread_id, filter_func=None):
                 if m['reactions'] is None:
                     m['reactions'] = {}
                 elif isinstance(m['reactions'], str):
-                   try:
-                       m['reactions'] = json.loads(m['reactions']) or {}
+                  try:
+                      m['reactions'] = json.loads(m['reactions']) or {}
                    except json.JSONDecodeError:
-                        logging.error(f"JSONデコードエラー: {m['reactions']}")
-                        m['reactions'] = {}
+                      logging.error(f"JSONデコードエラー: {m['reactions']}")
+                      m['reactions'] = {}
                 processed_messages.append([m["id"],m["message_id"],m["thread_id"],m["author_id"],m['reactions'],m["content"]])
+
             if filter_func:
                 messages = [m for m in processed_messages if filter_func(m)]
             if not messages:
@@ -399,24 +399,24 @@ class CombinedView(discord.ui.View):
     async def read_later(self, interaction: discord.Interaction, button: discord.ui.Button):
         bot_id = bot.user.id
         def filter_func(msg):
-            logging.info(f"メッセージID: {msg[1]}, 作者ID: {msg[3]}, リアクション: {msg[4]}")
-            logging.info(f"user_reacted に渡す直前のmsg: {msg}")
-            reacted = user_reacted(msg, READ_LATER_REACTION_ID, interaction.user.id)
-            logging.info(f"READ_LATER_REACTION_ID に対する user_reacted の結果: {reacted}, reaction_id={READ_LATER_REACTION_ID}, user_id={interaction.user.id}")
-            if not reacted:
+             logging.info(f"メッセージID: {msg[1]}, 作者ID: {msg[3]}, リアクション: {msg[4]}")
+             logging.info(f"user_reacted に渡す直前のmsg: {msg}")
+             reacted = user_reacted(msg, READ_LATER_REACTION_ID, interaction.user.id)
+             logging.info(f"READ_LATER_REACTION_ID に対する user_reacted の結果: {reacted}, reaction_id={READ_LATER_REACTION_ID}, user_id={interaction.user.id}")
+             if not reacted:
                 logging.info(f"  除外理由: あとで読むリアクションがない")
                 return False
-            if msg[3] == interaction.user.id or msg[3] == SPECIAL_EXCLUDE_AUTHOR:
+             if msg[3] == interaction.user.id or msg[3] == SPECIAL_EXCLUDE_AUTHOR:
                 logging.info(f"  除外理由: 自分の投稿または特定の投稿者")
                 return False
-            if msg[3] == bot_id:
+             if msg[3] == bot_id:
                  logging.info(f"  除外理由: Botの投稿")
                  return False
-            if last_chosen_authors.get(interaction.user.id) == msg[3]:
+             if last_chosen_authors.get(interaction.user.id) == msg[3]:
                 logging.info(f"  除外理由: 前回選んだ投稿者")
                 return False
-            logging.info(f"  結果: 選択候補")
-            return True
+             logging.info(f"  結果: 選択候補")
+             return True
         await self.get_and_handle_random_message(interaction, filter_func)
 
     @discord.ui.button(label="お気に入り", style=discord.ButtonStyle.primary, row=0, custom_id="favorite")
@@ -500,19 +500,15 @@ async def panel(interaction: discord.Interaction):
     channel = interaction.channel
     if channel is None:
         logging.error("コマンドを実行したチャンネルが取得できません。")
-        # コマンド実行者にのみ見えるエラーメッセージ表示
         await interaction.response.send_message("エラーが発生しました。チャンネルが特定できません。もう一度お試しください。", ephemeral=True)
         return
 
-    # 考え中を出さず、実行者にのみ見えるメッセージを即座に返す
     await interaction.response.send_message("パネルを表示します！", ephemeral=True)
-    # その後パネルを表示
     await send_panel(channel)
 
 @bot.tree.command(name="update_db")
 @is_specific_user()
 async def update_db(interaction: discord.Interaction):
-    # 考え中を出さないため、直接送信
     await interaction.response.send_message("データベースを更新しています...", ephemeral=True)
     try:
         await save_all_messages_to_db()
