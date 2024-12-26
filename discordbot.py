@@ -190,7 +190,7 @@ def user_reacted(msg: Dict[str, Any], reaction_id: int, user_id: int) -> bool:
             return False
     elif not isinstance(reaction_data, dict):
         return False
-    users = reaction_data.get(str(reaction_id), [])
+    users = reaction_data.get(reaction_id, [])
     return user_id in users
 
 # ランダムなメッセージを取得する
