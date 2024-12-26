@@ -294,19 +294,22 @@ def get_random_message_sync(thread_id: int, filter_func: Optional[Callable[[Dict
 async def get_random_message(thread_id: int, filter_func: Optional[Callable[[Dict[str, Any]], bool]] = None) -> Optional[Dict[str, Any]]:
     return await run_in_threadpool(get_random_message_sync, thread_id, filter_func)
 
-async def safe_fetch_message(channel: discord.TextChannel, message_id: int) -> Optional[discord.Message]:
-    try:
-        message = await channel.fetch_message(message_id)
-        return message
-    except discord.NotFound:
-        logging.warning(f"メッセージ {message_id} は存在しません。スキップします。")
-        return None
-    except discord.Forbidden:
-        logging.error(f"メッセージ {message_id} へのアクセスが拒否されました。")
-        return None
-    except discord.HTTPException as e:
-        logging.error(f"メッセージ {message_id} の取得中にHTTPエラーが発生しました: {e}")
-        return None
+async def safe_fetch_message(channel: discord.TextChannel, message_id: int, retry_count: int = 3) -> Optional[discord.Message]:
+    for i in range(retry_count):
+        try:
+            message = await channel.fetch_message(message_id)
+            return message
+        except discord.NotFound:
+            logging.warning(f"メッセージ {message_id} は存在しません。スキップします。")
+            return None
+        except discord.Forbidden:
+            logging.error(f"メッセージ {message_id} へのアクセスが拒否されました。")
+            return None
+        except discord.HTTPException as e:
+            logging.error(f"メッセージ {message_id} の取得中にHTTPエラーが発生しました: {e}, リトライ回数: {i+1}")
+            await asyncio.sleep(1) # リトライ前に少し待機
+    logging.error(f"メッセージ {message_id} の取得に失敗しました。リトライ上限に達しました。")
+    return None
 
 async def send_panel(channel: discord.TextChannel):
     global CURRENT_PANEL_MESSAGE_ID
@@ -393,6 +396,8 @@ class CombinedView(discord.ui.View):
       try:
         await interaction.response.defer()
         random_message = await get_random_message(THREAD_ID, filter_func)
+        if random_message:
+            LAST_CHOSEN_AUTHORS[interaction.user.id] = random_message['author_id']
         await self.handle_selection(interaction, random_message)
       except Exception as e:
         logging.error(f"ボタン押下時エラー: {e}")
@@ -401,7 +406,6 @@ class CombinedView(discord.ui.View):
     def create_filter_function(self, interaction: discord.Interaction, reaction_id: Optional[int] = None, exclude_own: bool = True) -> Callable[[Dict[str, Any]], bool]:
         def filter_func(msg: Dict[str, Any]) -> bool:
             logging.info(f"メッセージID: {msg['message_id']}, 作者ID: {msg['author_id']}, リアクション: {msg.get('reactions')}")
-            logging.info(f"user_reacted に渡す直前のmsg: {msg}")
             if reaction_id is not None and not user_reacted(msg, reaction_id, interaction.user.id):
                 logging.info(f"  除外理由: 指定されたリアクションがない")
                 return False
@@ -441,7 +445,6 @@ class CombinedView(discord.ui.View):
     async def random_exclude(self, interaction: discord.Interaction, button: discord.ui.Button):
         def filter_func(msg):
             logging.info(f"メッセージID: {msg['message_id']}, 作者ID: {msg['author_id']}, リアクション: {msg.get('reactions')}")
-            logging.info(f"user_reacted に渡す直前のmsg: {msg}")
             reacted = user_reacted(msg, RANDOM_EXCLUDE_REACTION_ID, interaction.user.id)
             logging.info(f"RANDOM_EXCLUDE_REACTION_ID に対する user_reacted の結果: {reacted}, reaction_id={RANDOM_EXCLUDE_REACTION_ID}, user_id={interaction.user.id}")
             if reacted:
@@ -464,7 +467,6 @@ class CombinedView(discord.ui.View):
     async def conditional_read(self, interaction: discord.Interaction, button: discord.ui.Button):
         def filter_func(msg):
             logging.info(f"メッセージID: {msg['message_id']}, 作者ID: {msg['author_id']}, リアクション: {msg.get('reactions')}")
-            logging.info(f"user_reacted に渡す直前のmsg: {msg}")
             reacted = user_reacted(msg, READ_LATER_REACTION_ID, interaction.user.id)
             logging.info(f"READ_LATER_REACTION_ID に対する user_reacted の結果: {reacted}, reaction_id={READ_LATER_REACTION_ID}, user_id={interaction.user.id}")
             if not reacted:
@@ -551,7 +553,8 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
             )
         finally:
             release_db_connection(conn)
-        await update_reactions_in_db(payload.message_id, payload.emoji.id, payload.user_id, add=True)
+        if channel:
+            await update_reactions_in_db(payload.message_id, payload.emoji.id, payload.user_id, add=True)
 
 @bot.event
 async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
