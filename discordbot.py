@@ -120,14 +120,8 @@ def save_message_to_db_sync(message_id, author_id, content):
     if not conn:
         return
     try:
+        reactions_json = json.dumps({})
         with conn.cursor() as cur:
-            # 既存のリアクションデータを保持する
-            cur.execute("SELECT reactions FROM messages WHERE message_id = %s", (message_id,))
-            row = cur.fetchone()
-            if row and row[0]:
-                reactions_json = row[0]
-            else:
-                reactions_json = json.dumps({})
             cur.execute("""
             INSERT INTO messages (message_id, thread_id, author_id, reactions, content)
             VALUES (%s, %s, %s, %s, %s)
@@ -163,7 +157,6 @@ def bulk_save_messages_to_db_sync(messages):
     try:
         data = []
         for message in messages:
-            # 既存のリアクションデータを保持する
             with conn.cursor() as cur:
                 cur.execute("SELECT reactions FROM messages WHERE message_id = %s", (message.id,))
                 row = cur.fetchone()
@@ -247,7 +240,7 @@ def user_reacted(msg, reaction_id, user_id):
         return False
     elif isinstance(reaction_data, str) and reaction_data:
         try:
-            reaction_data = json.loads(reaction_data)
+           reaction_data = json.loads(reaction_data)
         except json.JSONDecodeError:
             logging.error(f"JSONデコードエラー: {reaction_data}")
             return False
@@ -336,7 +329,7 @@ def create_panel_embed():
     embed = discord.Embed(
         title="🎯ｴﾛ漫画ﾙｰﾚｯﾄ",
         description=(
-            "botがｴﾛ漫画を選んでくれるよ！\n\n"
+            "botがｴﾛ漫画を選んでくれるよ！<a:c296:1288305823323263029>\n\n"
             "🔵：自分の<:b431:1289782471197458495>を除外しない\n"
             "🔴：自分の<:b431:1289782471197458495>を除外する\n\n"
             "ランダム：全体から選ぶ\n"
@@ -376,14 +369,17 @@ class CombinedView(discord.ui.View):
         except Exception as e:
             logging.error(f"メッセージ取得/応答中エラー: {e}")
             await interaction.channel.send(
-                f"{interaction.user.mention} エラーが発生しました。しばらくしてから再試行してください。"
+                f"{interaction.user.mention} エラーが発生したため、また後で試してね。"
             )
         finally:
             await send_panel(interaction.channel)
 
     async def get_and_handle_random_message(self, interaction, filter_func):
         try:
+            await interaction.response.defer()
             random_message = await get_random_message(THREAD_ID, filter_func)
+            # 応答はすでにdefer済みなのでfollowupかchannel.sendで送る
+            # handle_selection内でchannel.sendを利用
             await self.handle_selection(interaction, random_message)
         except Exception as e:
             logging.error(f"ボタン押下時エラー: {e}")
@@ -543,11 +539,13 @@ async def on_app_command_error(interaction: discord.Interaction, error: app_comm
 
 @bot.event
 async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
+    logging.info(f"リアクション追加: message_id={payload.message_id}, emoji_id={payload.emoji.id}, user_id={payload.user_id}")
     if payload.emoji.is_custom_emoji():
         await update_reactions_in_db(payload.message_id, payload.emoji.id, payload.user_id, add=True)
 
 @bot.event
 async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
+    logging.info(f"リアクション削除: message_id={payload.message_id}, emoji_id={payload.emoji.id}, user_id={payload.user_id}")
     if payload.emoji.is_custom_emoji():
         await update_reactions_in_db(payload.message_id, payload.emoji.id, payload.user_id, add=False)
 
