@@ -11,7 +11,6 @@ from psycopg2.extras import DictCursor
 from dotenv import load_dotenv
 import json
 
-# DatabaseQueryError クラスの定義（インデントを修正）
 class DatabaseQueryError(Exception):
     pass
 
@@ -73,16 +72,16 @@ def initialize_db():
     try:
         with conn.cursor() as cur:
             cur.execute("""
-                CREATE TABLE IF NOT EXISTS messages (
-                    id SERIAL PRIMARY KEY,
-                    message_id BIGINT NOT NULL UNIQUE,
-                    thread_id BIGINT NOT NULL,
-                    author_id BIGINT NOT NULL,
-                    reactions JSONB,
-                    content TEXT
-                )
+            CREATE TABLE IF NOT EXISTS messages (
+                id SERIAL PRIMARY KEY,
+                message_id BIGINT NOT NULL UNIQUE,
+                thread_id BIGINT NOT NULL,
+                author_id BIGINT NOT NULL,
+                reactions JSONB,
+                content TEXT
+            )
             """)
-        conn.commit()
+            conn.commit()
         logging.info("データベースの初期化が完了しました。")
     except Error as e:
         logging.error(
@@ -124,9 +123,9 @@ def save_message_to_db_sync(message_id, author_id, content):
         reactions_json = json.dumps({})
         with conn.cursor() as cur:
             cur.execute("""
-                INSERT INTO messages (message_id, thread_id, author_id, reactions, content)
-                VALUES (%s, %s, %s, %s, %s)
-                ON CONFLICT (message_id) DO UPDATE SET content = EXCLUDED.content
+            INSERT INTO messages (message_id, thread_id, author_id, reactions, content)
+            VALUES (%s, %s, %s, %s, %s)
+            ON CONFLICT (message_id) DO UPDATE SET content = EXCLUDED.content
             """, (
                 message_id,
                 THREAD_ID,
@@ -134,7 +133,7 @@ def save_message_to_db_sync(message_id, author_id, content):
                 reactions_json,
                 content
             ))
-        conn.commit()
+            conn.commit()
     except Error as e:
         logging.error(
             f"メッセージ保存中エラー: {e} "
@@ -163,7 +162,7 @@ def bulk_save_messages_to_db_sync(messages):
                 VALUES (%s, %s, %s, %s, %s)
                 ON CONFLICT (message_id) DO UPDATE SET content = EXCLUDED.content
             """, data)
-        conn.commit()
+            conn.commit()
         logging.info(f"{len(messages)}件のメッセージをバルク挿入または更新しました。")
     except Error as e:
         logging.error(
@@ -202,7 +201,7 @@ def update_reactions_in_db_sync(message_id, emoji_id, user_id, add=True):
 
             reactions[str_emoji_id] = user_list
             cur.execute("UPDATE messages SET reactions = %s WHERE message_id = %s", (json.dumps(reactions), message_id))
-        conn.commit()
+            conn.commit()
     except Error as e:
         logging.error(
             f"reactions更新中エラー: {e} "
@@ -297,6 +296,7 @@ def is_specific_user():
     return app_commands.check(predicate)
 
 def create_panel_embed():
+    # #ff69b4は16進数で0xFF69B4
     embed = discord.Embed(
         title="🎯ｴﾛ漫画ﾙｰﾚｯﾄ",
         description=(
@@ -307,7 +307,7 @@ def create_panel_embed():
             "あとで読む：<:b434:1304690617405669376>を付けた投稿から選ぶ\n"
             "お気に入り：<:b435:1304690627723657267>を付けた投稿から選ぶ"
         ),
-        color=0xFF69B4
+        color=0xFF69B4  # #ff69b4を16進整数で表現
     )
     return embed
 
@@ -335,12 +335,12 @@ class CombinedView(discord.ui.View):
                 )
             else:
                 await interaction.channel.send(
-                    f"{interaction.user.mention} 条件に合う投稿なかった！また後で試して。"
+                    f"{interaction.user.mention} 条件に合う投稿が見つかりませんでした。もう一度お試しください。"
                 )
         except Exception as e:
             logging.error(f"メッセージ取得/応答中エラー: {e}")
             await interaction.channel.send(
-                f"{interaction.user.mention} エラーが発生したから、また後で試して。"
+                f"{interaction.user.mention} エラーが発生しました。しばらくしてから再試行してください。"
             )
         finally:
             await send_panel(interaction.channel)
@@ -421,19 +421,15 @@ async def panel(interaction: discord.Interaction):
     channel = interaction.channel
     if channel is None:
         logging.error("コマンドを実行したチャンネルが取得できません。")
-        # コマンド実行者にのみ見えるエラーメッセージ表示
         await interaction.response.send_message("エラーが発生しました。チャンネルが特定できません。もう一度お試しください。", ephemeral=True)
         return
 
-    # 考え中を出さず、実行者にのみ見えるメッセージを即座に返す
     await interaction.response.send_message("パネルを表示します！", ephemeral=True)
-    # その後パネルを表示
     await send_panel(channel)
 
 @bot.tree.command(name="update_db")
 @is_specific_user()
 async def update_db(interaction: discord.Interaction):
-    # 考え中を出さないため、直接送信
     await interaction.response.send_message("データベースを更新しています...", ephemeral=True)
     try:
         await save_all_messages_to_db()
@@ -465,7 +461,6 @@ async def save_all_messages_to_db_task():
     await save_all_messages_to_db()
 
 def save_all_messages_to_db_sync(limit_count=100):
-    # ここでは接続だけとってすぐリリースしているが、必要に応じて実装を拡張
     conn = get_db_connection()
     if not conn:
         return
@@ -481,7 +476,7 @@ async def save_all_messages_to_db():
                 messages.append(message)
             if messages:
                 await bulk_save_messages_to_db(messages)
-                logging.info(f"最大{limit_count}件のメッセージをデータベースに保存しました。")
+            logging.info(f"最大{limit_count}件のメッセージをデータベースに保存しました。")
         except discord.HTTPException as e:
             logging.error(f"メッセージ履歴取得中エラー: {e}")
     else:
@@ -502,8 +497,8 @@ if DISCORD_TOKEN:
         bot.run(DISCORD_TOKEN)
     except Exception as e:
         logging.error(f"Bot起動中エラー: {e}")
-    if db_pool:
-        db_pool.closeall()
-        logging.info("データベース接続プールをクローズしました。")
+        if db_pool:
+            db_pool.closeall()
+            logging.info("データベース接続プールをクローズしました。")
 else:
     logging.error("DISCORD_TOKENが設定されていません。")
