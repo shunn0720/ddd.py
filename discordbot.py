@@ -36,6 +36,13 @@ SPECIFIC_USER_ID = 822460191118721034
 LAST_CHOSEN_AUTHORS: Dict[int, int] = {}
 CURRENT_PANEL_MESSAGE_ID: Optional[int] = None
 
+# Botの初期化
+intents = discord.Intents.default()
+intents.messages = True
+intents.message_content = True
+intents.reactions = True
+bot = commands.Bot(command_prefix="!", intents=intents)
+
 # データベース接続プールの初期化
 try:
     db_pool = pool.SimpleConnectionPool(
@@ -318,8 +325,6 @@ class CombinedView(discord.ui.View):
             await interaction.channel.send(
                 f"エラーが発生したため、また後で試してね。"
             )
-        finally:
-            await send_panel(interaction.channel)
 
     async def get_and_handle_random_message(self, interaction: discord.Interaction, filter_func: Callable[[Dict[str, Any]], bool]):
       try:
