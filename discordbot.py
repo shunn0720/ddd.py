@@ -246,7 +246,7 @@ def user_reacted(msg, reaction_id, user_id):
         return False
     elif isinstance(reaction_data, str) and reaction_data:
         try:
-           reaction_data = json.loads(reaction_data)
+            reaction_data = json.loads(reaction_data)
         except json.JSONDecodeError:
             logging.error(f"JSONデコードエラー: {reaction_data}")
             return False
@@ -267,9 +267,9 @@ def get_random_message_sync(thread_id, filter_func=None):
                 if m['reactions'] is None:
                     m['reactions'] = {}
                 elif isinstance(m['reactions'], str):
-                   try:
-                      m['reactions'] = json.loads(m['reactions'])
-                   except json.JSONDecodeError:
+                    try:
+                        m['reactions'] = json.loads(m['reactions'])
+                    except json.JSONDecodeError:
                         logging.error(f"JSONデコードエラー: {m['reactions']}")
                         m['reactions'] = {}
             if filter_func:
