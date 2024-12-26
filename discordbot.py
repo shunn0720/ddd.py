@@ -398,7 +398,7 @@ class CombinedView(discord.ui.View):
         logging.error(f"ボタン押下時エラー: {e}")
         await interaction.followup.send(f"{interaction.user.mention} 処理中にエラーが発生しました。再試行してください。")
 
-    def create_filter_function(self, reaction_id: Optional[int] = None, exclude_own: bool = True) -> Callable[[Dict[str, Any]], bool]:
+    def create_filter_function(self, interaction: discord.Interaction, reaction_id: Optional[int] = None, exclude_own: bool = True) -> Callable[[Dict[str, Any]], bool]:
         def filter_func(msg: Dict[str, Any]) -> bool:
             logging.info(f"メッセージID: {msg['message_id']}, 作者ID: {msg['author_id']}, リアクション: {msg.get('reactions')}")
             logging.info(f"user_reacted に渡す直前のmsg: {msg}")
@@ -423,18 +423,18 @@ class CombinedView(discord.ui.View):
 
     @discord.ui.button(label="ランダム", style=discord.ButtonStyle.primary, row=0, custom_id="random_normal")
     async def random_normal(self, interaction: discord.Interaction, button: discord.ui.Button):
-        filter_func = self.create_filter_function()
+        filter_func = self.create_filter_function(interaction)
         await self.get_and_handle_random_message(interaction, filter_func)
 
     @discord.ui.button(label="あとで読む", style=discord.ButtonStyle.primary, row=0, custom_id="read_later")
     async def read_later(self, interaction: discord.Interaction, button: discord.ui.Button):
-        filter_func = self.create_filter_function(reaction_id=READ_LATER_REACTION_ID)
+        filter_func = self.create_filter_function(interaction, reaction_id=READ_LATER_REACTION_ID)
         await self.get_and_handle_random_message(interaction, filter_func)
 
 
     @discord.ui.button(label="お気に入り", style=discord.ButtonStyle.primary, row=0, custom_id="favorite")
     async def favorite(self, interaction: discord.Interaction, button: discord.ui.Button):
-       filter_func = self.create_filter_function(reaction_id=FAVORITE_REACTION_ID)
+       filter_func = self.create_filter_function(interaction, reaction_id=FAVORITE_REACTION_ID)
        await self.get_and_handle_random_message(interaction, filter_func)
 
     @discord.ui.button(label="ランダム", style=discord.ButtonStyle.danger, row=1, custom_id="random_exclude")
@@ -518,9 +518,39 @@ async def on_app_command_error(interaction: discord.Interaction, error: app_comm
         await interaction.response.send_message("コマンド実行中にエラーが発生しました。もう一度お試しください。", ephemeral=True)
 
 @bot.event
+async def on_message(message: discord.Message):
+    if message.channel.id == THREAD_ID:
+        await save_message_to_db(message)
+
+@bot.event
 async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
     logging.info(f"リアクション追加: message_id={payload.message_id}, emoji_id={payload.emoji.id}, user_id={payload.user_id}")
     if payload.emoji.is_custom_emoji():
+        conn = get_db_connection()
+        if not conn:
+            return
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT message_id FROM messages WHERE message_id = %s", (payload.message_id,))
+                if not cur.fetchone():
+                    channel = bot.get_channel(payload.channel_id)
+                    if channel:
+                        message = await safe_fetch_message(channel, payload.message_id)
+                        if message:
+                            await save_message_to_db(message)
+                            logging.info(f"メッセージをデータベースに保存しました: message_id={payload.message_id}")
+                        else:
+                            logging.warning(f"メッセージ {payload.message_id} の取得に失敗しました。")
+                    else:
+                        logging.error(f"チャンネル {payload.channel_id} が見つかりません。")
+        except Error as e:
+            logging.error(
+                f"メッセージ存在確認中エラー: {e} "
+                f"pgcode={getattr(e, 'pgcode', '')}, "
+                f"detail={getattr(getattr(e, 'diag', None), 'message_detail', '')}"
+            )
+        finally:
+            release_db_connection(conn)
         await update_reactions_in_db(payload.message_id, payload.emoji.id, payload.user_id, add=True)
 
 @bot.event
@@ -558,7 +588,8 @@ async def save_all_messages_to_db():
 @bot.event
 async def on_ready():
     bot.add_view(CombinedView())
-    save_all_messages_to_db_task.start()
+    # save_all_messages_to_db_task.start() # Bot起動時に一度だけ実行するように変更
+    await save_all_messages_to_db()
     logging.info(f"Botが起動しました！ {bot.user}")
     try:
         synced = await bot.tree.sync()
