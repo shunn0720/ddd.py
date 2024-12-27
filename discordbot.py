@@ -430,6 +430,7 @@ async def on_message(message: discord.Message):
 # リアクションイベント
 @bot.event
 async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
+    channel = None
     if payload.emoji.id is None:
         logging.warning("カスタム絵文字ではないリアクションが追加されました。")
         return
@@ -462,16 +463,16 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
                         logging.warning(f"メッセージ {payload.message_id} の取得に失敗しました。")
                 else:
                     logging.error(f"チャンネル {payload.channel_id} が見つかりません。")
-        except Error as e:
-            logging.error(
-                f"メッセージ存在確認中エラー: {e} "
-                f"pgcode={getattr(e, 'pgcode', '')}, "
-                f"detail={getattr(getattr(e, 'diag', None), 'message_detail', '')}"
-            )
-        finally:
-            release_db_connection(conn)
-        if channel:
-            await update_reactions_in_db(payload.message_id, payload.emoji.id, payload.user_id, add=True)
+    except Error as e:
+        logging.error(
+            f"メッセージ存在確認中エラー: {e} "
+            f"pgcode={getattr(e, 'pgcode', '')}, "
+            f"detail={getattr(getattr(e, 'diag', None), 'message_detail', '')}"
+        )
+    finally:
+        release_db_connection(conn)
+    if channel:
+        await update_reactions_in_db(payload.message_id, payload.emoji.id, payload.user_id, add=True)
 
 @bot.event
 async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
