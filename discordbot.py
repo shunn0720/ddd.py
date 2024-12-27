@@ -11,9 +11,11 @@ from psycopg2.extras import DictCursor
 from dotenv import load_dotenv
 import json
 
+# -- Custom class for DB errors
 class DatabaseQueryError(Exception):
     pass
 
+# -- Load .env variables
 load_dotenv()
 
 logging.basicConfig(
@@ -27,7 +29,7 @@ logging.basicConfig(
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-# Initialize PostgreSQL connection pool
+# -- Attempt to initialize your database connection pool
 try:
     db_pool = pool.SimpleConnectionPool(
         minconn=1, maxconn=10, dsn=DATABASE_URL, sslmode='require'
@@ -41,7 +43,7 @@ except Error as e:
     )
     db_pool = None
 
-# Retrieve a connection from the pool
+# -- Helper function to get a DB connection
 def get_db_connection():
     try:
         if db_pool:
@@ -56,7 +58,7 @@ def get_db_connection():
         )
         return None
 
-# Return a connection to the pool
+# -- Helper function to release a DB connection
 def release_db_connection(conn):
     try:
         if db_pool and conn:
@@ -68,6 +70,7 @@ def release_db_connection(conn):
             f"detail={getattr(getattr(e, 'diag', None), 'message_detail', '')}"
         )
 
+# -- Initialize the database if needed (e.g., create tables)
 def initialize_db():
     conn = get_db_connection()
     if not conn:
@@ -97,6 +100,7 @@ def initialize_db():
 
 initialize_db()
 
+# -- Discord bot setup
 intents = discord.Intents.default()
 intents.messages = True
 intents.message_content = True
@@ -105,7 +109,7 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 
-# IDs used in the bot (thread, reaction emojis, special author to exclude, etc.)
+# -- IDs used in your bot (threads, reaction emojis, etc.)
 THREAD_ID = 1288407362318893109
 READ_LATER_REACTION_ID = 1304690617405669376
 FAVORITE_REACTION_ID = 1304690627723657267
@@ -115,17 +119,77 @@ SPECIAL_EXCLUDE_AUTHOR = 695096014482440244
 last_chosen_authors = {}
 current_panel_message_id = None
 
-# Helper function to run synchronous code in a threadpool
-async def run_in_threadpool(func, *args, **kwargs):
-    loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(None, func, *args, **kwargs)
+# -----------------------------------------------------------------
+#  MISSING FUNCTIONS ADDED HERE
+# -----------------------------------------------------------------
 
-# Synchronous function to save a message to the database
+async def safe_fetch_message(channel, message_id):
+    """
+    Safely fetch a message from a channel by its ID.
+    Returns None if it cannot be fetched.
+    """
+    try:
+        return await channel.fetch_message(message_id)
+    except (discord.NotFound, discord.HTTPException):
+        return None
+
+async def update_reactions_in_db(message_id, emoji_id, user_id, add=True):
+    """
+    Update the reactions JSON in your 'messages' table (add or remove a reaction).
+    Modify according to your database schema and usage.
+    """
+    conn = get_db_connection()
+    if not conn:
+        return
+    try:
+        with conn.cursor(cursor_factory=DictCursor) as cur:
+            cur.execute("SELECT reactions FROM messages WHERE message_id = %s", (message_id,))
+            row = cur.fetchone()
+            if not row:
+                return
+            reactions = row['reactions'] or {}
+            if isinstance(reactions, str):
+                try:
+                    reactions = json.loads(reactions)
+                except json.JSONDecodeError:
+                    reactions = {}
+
+            # Convert both keys to strings for consistency
+            str_emoji_id = str(emoji_id)
+            user_list = reactions.get(str_emoji_id, [])
+
+            if add and user_id not in user_list:
+                user_list.append(user_id)
+            elif not add and user_id in user_list:
+                user_list.remove(user_id)
+
+            reactions[str_emoji_id] = user_list
+            cur.execute(
+                "UPDATE messages SET reactions = %s WHERE message_id = %s",
+                (json.dumps(reactions), message_id)
+            )
+            conn.commit()
+
+    except Error as e:
+        logging.error(
+            f"reactions更新中エラー: {e} "
+            f"pgcode={getattr(e, 'pgcode', '')}, "
+            f"detail={getattr(getattr(e, 'diag', None), 'message_detail', '')}"
+        )
+    finally:
+        release_db_connection(conn)
+
+# -----------------------------------------------------------------
+#  END OF ADDED FUNCTIONS
+# -----------------------------------------------------------------
+
+# -- Synchronous DB insert/update
 def save_message_to_db_sync(message_id, author_id, content):
     conn = get_db_connection()
     if not conn:
         return
     try:
+        # Default empty JSON for reactions
         reactions_json = json.dumps({})
         with conn.cursor() as cur:
             cur.execute("""
@@ -149,52 +213,16 @@ def save_message_to_db_sync(message_id, author_id, content):
     finally:
         release_db_connection(conn)
 
-# Asynchronous wrapper to save a Discord message object to the DB
+# -- Asynchronous wrapper for save_message_to_db_sync
 async def save_message_to_db(message):
-    await run_in_threadpool(save_message_to_db_sync, message.id, message.author.id, message.content)
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, save_message_to_db_sync, message.id, message.author.id, message.content)
 
-# Update or remove reactions in the DB
-def update_reactions_in_db_sync(message_id, emoji_id, user_id, add=True):
-    conn = get_db_connection()
-    if not conn:
-        return
-    try:
-        with conn.cursor(cursor_factory=DictCursor) as cur:
-            cur.execute("SELECT reactions FROM messages WHERE message_id = %s", (message_id,))
-            row = cur.fetchone()
-            if not row:
-                return
-            reactions = row['reactions'] or {}
-            if isinstance(reactions, str):
-                reactions = json.loads(reactions)
-            str_emoji_id = str(emoji_id)
-            user_list = reactions.get(str_emoji_id, [])
-
-            if add:
-                if user_id not in user_list:
-                    user_list.append(user_id)
-            else:
-                if user_id in user_list:
-                    user_list.remove(user_id)
-
-            reactions[str_emoji_id] = user_list
-            cur.execute("UPDATE messages SET reactions = %s WHERE message_id = %s",
-                        (json.dumps(reactions), message_id))
-            conn.commit()
-    except Error as e:
-        logging.error(
-            f"reactions更新中エラー: {e} "
-            f"pgcode={getattr(e, 'pgcode', '')}, "
-            f"detail={getattr(getattr(e, 'diag', None), 'message_detail', '')}"
-        )
-    finally:
-        release_db_connection(conn)
-
-async def update_reactions_in_db(message_id, emoji_id, user_id, add=True):
-    await run_in_threadpool(update_reactions_in_db_sync, message_id, emoji_id, user_id, add)
-
-# Checks if a given user reacted to a message with a specific reaction
 def user_reacted(msg, reaction_id, user_id):
+    """
+    Checks if user_id has reacted to the message with matching reaction_id.
+    msg['reactions'] should be a dict or JSON convertible to a dict.
+    """
     reaction_data = msg.get('reactions', {})
     if isinstance(reaction_data, str):
         try:
@@ -204,7 +232,7 @@ def user_reacted(msg, reaction_id, user_id):
     users = reaction_data.get(str(reaction_id), [])
     return user_id in users
 
-# Synchronous function to retrieve a random message from the database
+# -- Get a random message from DB (synchronous)
 def get_random_message_sync(thread_id, filter_func=None):
     conn = get_db_connection()
     if not conn:
@@ -213,13 +241,12 @@ def get_random_message_sync(thread_id, filter_func=None):
         with conn.cursor(cursor_factory=DictCursor) as cur:
             cur.execute("SELECT * FROM messages WHERE thread_id = %s", (thread_id,))
             messages = cur.fetchall()
-            # Ensure the reactions column is a valid dictionary
+            # Convert reactions from string to dict if needed
             for m in messages:
                 if m['reactions'] is None:
                     m['reactions'] = {}
                 elif isinstance(m['reactions'], str):
                     m['reactions'] = json.loads(m['reactions']) or {}
-
             if filter_func:
                 messages = [m for m in messages if filter_func(m)]
             if not messages:
@@ -235,11 +262,12 @@ def get_random_message_sync(thread_id, filter_func=None):
     finally:
         release_db_connection(conn)
 
-# Asynchronous wrapper for get_random_message_sync
+# -- Asynchronous wrapper for get_random_message_sync
 async def get_random_message(thread_id, filter_func=None):
-    return await run_in_threadpool(get_random_message_sync, thread_id, filter_func)
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, get_random_message_sync, thread_id, filter_func)
 
-# Bulk save messages to DB (not fully used in the final snippet, but useful if needed)
+# -- Additional optional bulk-saving function
 def bulk_save_messages_to_db_sync(messages):
     conn = get_db_connection()
     if not conn or not messages:
@@ -268,22 +296,21 @@ def bulk_save_messages_to_db_sync(messages):
         release_db_connection(conn)
 
 async def bulk_save_messages_to_db(messages):
-    await run_in_threadpool(bulk_save_messages_to_db_sync, messages)
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, bulk_save_messages_to_db_sync, messages)
 
-# Task to periodically save messages (if needed)
 @tasks.loop(minutes=60)
 async def save_all_messages_to_db_task():
     await save_all_messages_to_db()
 
-# Synchronous placeholder to retrieve/save all messages if needed
 def save_all_messages_to_db_sync(limit_count=100):
+    # Placeholder for advanced logic if your channel is huge
     conn = get_db_connection()
     if not conn:
         return
-    # Implementation placeholder or logic to handle messages
+    # ...
     release_db_connection(conn)
 
-# Asynchronous wrapper that fetches channel history and calls bulk_save_messages_to_db
 async def save_all_messages_to_db():
     channel = bot.get_channel(THREAD_ID)
     if channel:
@@ -300,7 +327,6 @@ async def save_all_messages_to_db():
     else:
         logging.error("指定されたTHREAD_IDのチャンネルが見つかりません。")
 
-# Sends the panel message (the user-facing UI)
 async def send_panel(channel):
     global current_panel_message_id
     if current_panel_message_id:
@@ -322,7 +348,6 @@ async def send_panel(channel):
     except discord.HTTPException as e:
         logging.error(f"パネルメッセージ送信中エラー: {e}")
 
-# Creates the embed for the panel
 def create_panel_embed():
     embed = discord.Embed(
         title="🎯ｴﾛ漫画ﾙｰﾚｯﾄ",
@@ -334,14 +359,13 @@ def create_panel_embed():
             "あとで読む：<:b434:1304690617405669376>を付けた投稿から選ぶ\n"
             "お気に入り：<:b435:1304690627723657267>を付けた投稿から選ぶ"
         ),
-        color=0xFF69B4  # #ff69b4を16進整数で表現
+        color=0xFF69B4
     )
     return embed
 
-# View (buttons) for user interaction
 class CombinedView(discord.ui.View):
     def __init__(self):
-        super().__init__(timeout=None)  # Keep buttons active permanently
+        super().__init__(timeout=None)
 
     async def get_author_name(self, author_id):
         user = bot.get_user(author_id)
@@ -381,7 +405,6 @@ class CombinedView(discord.ui.View):
             logging.error(f"ボタン押下時エラー: {e}")
             await interaction.channel.send(f"{interaction.user.mention} 処理中にエラーが発生しました。再試行してください。")
 
-    # Button handlers
     @discord.ui.button(label="ランダム", style=discord.ButtonStyle.primary, row=0)
     async def random_normal(self, interaction: discord.Interaction, button: discord.ui.Button):
         def filter_func(msg):
@@ -421,6 +444,7 @@ class CombinedView(discord.ui.View):
     @discord.ui.button(label="ランダム", style=discord.ButtonStyle.danger, row=1)
     async def random_exclude(self, interaction: discord.Interaction, button: discord.ui.Button):
         def filter_func(msg):
+            # Exclude messages if user reacted with RANDOM_EXCLUDE_REACTION_ID
             if user_reacted(msg, RANDOM_EXCLUDE_REACTION_ID, interaction.user.id):
                 return False
             if msg['author_id'] == interaction.user.id or msg['author_id'] == SPECIAL_EXCLUDE_AUTHOR:
@@ -444,7 +468,6 @@ class CombinedView(discord.ui.View):
             return True
         await self.get_and_handle_random_message(interaction, filter_func)
 
-# Slash command to show the panel
 @bot.tree.command(name="panel")
 async def panel(interaction: discord.Interaction):
     channel = interaction.channel
@@ -454,30 +477,44 @@ async def panel(interaction: discord.Interaction):
     else:
         await interaction.response.send_message("エラー: チャンネルが取得できませんでした。", ephemeral=True)
 
-# Reaction event handlers to update the DB
+# -- Reaction add event
 @bot.event
 async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
+    channel = bot.get_channel(payload.channel_id)
+    if channel is None:
+        return
+    message = await safe_fetch_message(channel, payload.message_id)
+    if message is None:
+        return
+    # If custom emoji, update DB
     if payload.emoji.is_custom_emoji():
         await update_reactions_in_db(payload.message_id, payload.emoji.id, payload.user_id, add=True)
 
+# -- Reaction remove event
 @bot.event
 async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
+    channel = bot.get_channel(payload.channel_id)
+    if channel is None:
+        return
+    message = await safe_fetch_message(channel, payload.message_id)
+    if message is None:
+        return
     if payload.emoji.is_custom_emoji():
         await update_reactions_in_db(payload.message_id, payload.emoji.id, payload.user_id, add=False)
 
-# When the bot is ready
+# -- Bot on_ready event
 @bot.event
 async def on_ready():
-    # Start the background task if needed
-    save_all_messages_to_db_task.start()
     logging.info(f"Botが起動しました！ {bot.user}")
+    # Start optional background task to save messages periodically
+    save_all_messages_to_db_task.start()
     try:
         synced = await bot.tree.sync()
         logging.info(f"スラッシュコマンドが同期されました: {synced}")
     except Exception as e:
         logging.error(f"スラッシュコマンド同期中エラー: {e}")
 
-# Start the bot
+# -- Start the bot
 if DISCORD_TOKEN:
     try:
         bot.run(DISCORD_TOKEN)
