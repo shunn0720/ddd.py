@@ -340,7 +340,7 @@ class CombinedView(discord.ui.View):
         except Exception as e:
             logging.error(f"メッセージ取得/応答中エラー: {e}")
             await interaction.channel.send(
-                f"{interaction.user.mention} エラーが発生したため、また後で試してね。"
+                f"エラーが発生したため、また後で試してね。"
             )
         finally:
             await send_panel(interaction.channel)
@@ -355,8 +355,6 @@ class CombinedView(discord.ui.View):
       except Exception as e:
         logging.error(f"ボタン押下時エラー: {e}")
         await interaction.followup.send(f"処理中にエラーが発生しました。再試行してください。")
-      finally:
-        await send_panel(interaction.channel)
 
     def create_filter_function(self, interaction: discord.Interaction, reaction_id: Optional[int] = None, exclude_own: bool = True, exclude_reaction_id: Optional[int] = None) -> Callable[[Dict[str, Any]], bool]:
         def filter_func(msg: Dict[str, Any]) -> bool:
