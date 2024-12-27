@@ -15,7 +15,7 @@ from typing import Optional, Callable, Dict, Any, List
 load_dotenv()
 
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,  # ログレベルをDEBUGに変更
     format="%(asctime)s [%(levelname)s] %(message)s",
     handlers=[
         logging.FileHandler("bot.log"),
@@ -126,7 +126,7 @@ def save_message_to_db_sync(message_id: int, author_id: int, content: str):
                 content = EXCLUDED.content
             """, (message_id, THREAD_ID, author_id, reactions_json, content))
             conn.commit()
-        logging.info(f"メッセージを保存しました: message_id={message_id}, author_id={author_id}")
+        logging.debug(f"メッセージを保存しました: message_id={message_id}, author_id={author_id}")
     except Error as e:
         logging.error(f"メッセージ保存中エラー: {e}")
     finally:
@@ -160,11 +160,11 @@ def update_reactions_in_db_sync(message_id: int, emoji_id: int, user_id: int, ad
             if add:
                 if user_id not in user_list:
                     user_list.append(user_id)
-                    logging.info(f"リアクション追加: message_id={message_id}, emoji_id={emoji_id}, user_id={user_id}")
+                    logging.debug(f"リアクション追加: message_id={message_id}, emoji_id={emoji_id}, user_id={user_id}")
             else:
                 if user_id in user_list:
                     user_list.remove(user_id)
-                    logging.info(f"リアクション削除: message_id={message_id}, emoji_id={emoji_id}, user_id={user_id}")
+                    logging.debug(f"リアクション削除: message_id={message_id}, emoji_id={emoji_id}, user_id={user_id}")
 
             reactions[str_emoji_id] = user_list
             cur.execute("UPDATE messages SET reactions = %s WHERE message_id = %s", (json.dumps(reactions), message_id))
@@ -200,7 +200,24 @@ def get_random_message_sync(thread_id: int, filter_func: Optional[Callable[[Dict
         return None
     try:
         with conn.cursor(cursor_factory=DictCursor) as cur:
-            cur.execute("SELECT * FROM messages WHERE thread_id = %s", (thread_id,))
+            query = "SELECT * FROM messages WHERE thread_id = %s"
+            params = [thread_id]
+            if filter_func:
+                # ここでデータベースクエリで絞り込みを行う
+                if filter_func.__name__ == "filter_func_read_later":
+                    query += " AND reactions @> %s"
+                    params.append(json.dumps({str(READ_LATER_REACTION_ID): []}))
+                elif filter_func.__name__ == "filter_func_favorite":
+                    query += " AND reactions @> %s"
+                    params.append(json.dumps({str(FAVORITE_REACTION_ID): []}))
+                elif filter_func.__name__ == "filter_func_random_exclude":
+                    query += " AND NOT reactions @> %s"
+                    params.append(json.dumps({str(RANDOM_EXCLUDE_REACTION_ID): []}))
+                elif filter_func.__name__ == "filter_func_conditional_read":
+                    query += " AND reactions @> %s AND NOT reactions @> %s"
+                    params.append(json.dumps({str(READ_LATER_REACTION_ID): []}))
+                    params.append(json.dumps({str(RANDOM_EXCLUDE_REACTION_ID): []}))
+            cur.execute(query, params)
             messages = cur.fetchall()
             for m in messages:
                 if m['reactions'] is None:
@@ -344,22 +361,22 @@ class CombinedView(discord.ui.View):
     def create_filter_function(self, interaction: discord.Interaction, reaction_id: Optional[int] = None, exclude_own: bool = True, exclude_reaction_id: Optional[int] = None) -> Callable[[Dict[str, Any]], bool]:
         def filter_func(msg: Dict[str, Any]) -> bool:
             if reaction_id is not None and not user_reacted(msg, reaction_id, interaction.user.id):
-                logging.info(f"  除外理由: 指定されたリアクションがない")
+                logging.debug(f"  除外理由: 指定されたリアクションがない")
                 return False
             if exclude_reaction_id is not None and user_reacted(msg, exclude_reaction_id, interaction.user.id):
-                logging.info(f"  除外理由: 指定された除外リアクションがある")
+                logging.debug(f"  除外理由: 指定された除外リアクションがある")
                 return False
             if exclude_own and msg['author_id'] == interaction.user.id:
-                logging.info(f"  除外理由: 自分の投稿")
+                logging.debug(f"  除外理由: 自分の投稿")
                 return False
             if msg['author_id'] == SPECIAL_EXCLUDE_AUTHOR:
-                logging.info(f"  除外理由: 特定の投稿者")
+                logging.debug(f"  除外理由: 特定の投稿者")
                 return False
             if msg['author_id'] == self.bot_id:
-                logging.info(f"  除外理由: Botの投稿")
+                logging.debug(f"  除外理由: Botの投稿")
                 return False
             if LAST_CHOSEN_AUTHORS.get(interaction.user.id) == msg['author_id']:
-                logging.info(f"  除外理由: 前回選んだ投稿者")
+                logging.debug(f"  除外理由: 前回選んだ投稿者")
                 return False
             return True
         return filter_func
@@ -437,14 +454,14 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
 
     emoji_name = payload.emoji.name
     emoji_id = payload.emoji.id
-    logging.info(f"カスタム絵文字リアクション追加: {emoji_name} (ID: {emoji_id})")
+    logging.debug(f"カスタム絵文字リアクション追加: {emoji_name} (ID: {emoji_id})")
 
     if emoji_id == READ_LATER_REACTION_ID:
-        logging.info(f"特定の絵文字 <:b434:{READ_LATER_REACTION_ID}> がリアクションとして追加されました！")
+        logging.debug(f"特定の絵文字 <:b434:{READ_LATER_REACTION_ID}> がリアクションとして追加されました！")
     if emoji_id == FAVORITE_REACTION_ID:
-        logging.info(f"特定の絵文字 <:b435:{FAVORITE_REACTION_ID}> がリアクションとして追加されました！")
+        logging.debug(f"特定の絵文字 <:b435:{FAVORITE_REACTION_ID}> がリアクションとして追加されました！")
     if emoji_id == RANDOM_EXCLUDE_REACTION_ID:
-        logging.info(f"特定の絵文字 <:b431:{RANDOM_EXCLUDE_REACTION_ID}> がリアクションとして追加されました！")
+        logging.debug(f"特定の絵文字 <:b431:{RANDOM_EXCLUDE_REACTION_ID}> がリアクションとして追加されました！")
 
     conn = get_db_connection()
     if not conn:
@@ -458,7 +475,7 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
                     message = await safe_fetch_message(channel, payload.message_id)
                     if message:
                         await save_message_to_db(message)
-                        logging.info(f"メッセージをデータベースに保存しました: message_id={payload.message_id}")
+                        logging.debug(f"メッセージをデータベースに保存しました: message_id={payload.message_id}")
                     else:
                         logging.warning(f"メッセージ {payload.message_id} の取得に失敗しました。")
                 else:
@@ -479,7 +496,7 @@ async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
     if payload.emoji.id is None:
         logging.warning("カスタム絵文字ではないリアクションが削除されました。")
         return
-    logging.info(f"カスタム絵文字リアクション削除: {payload.emoji.name} (ID: {payload.emoji.id})")
+    logging.debug(f"カスタム絵文字リアクション削除: {payload.emoji.name} (ID: {payload.emoji.id})")
     await update_reactions_in_db(payload.message_id, payload.emoji.id, payload.user_id, add=False)
 
 # メッセージを定期的に保存するタスク
