@@ -15,7 +15,7 @@ from typing import Optional, Callable, Dict, Any, List
 load_dotenv()
 
 logging.basicConfig(
-    level=logging.DEBUG,  # ログレベルをDEBUGに変更
+    level=logging.DEBUG,
     format="%(asctime)s [%(levelname)s] %(message)s",
     handlers=[
         logging.FileHandler("bot.log"),
