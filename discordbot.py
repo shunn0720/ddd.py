@@ -43,6 +43,12 @@ intents.message_content = True
 intents.reactions = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
+# 特定のユーザーかどうかを判定する
+def is_specific_user():
+    async def predicate(interaction: discord.Interaction) -> bool:
+        return interaction.user.id == SPECIFIC_USER_ID
+    return app_commands.check(predicate)
+
 # データベース接続プールの初期化
 try:
     db_pool = pool.SimpleConnectionPool(
