@@ -340,7 +340,7 @@ class CombinedView(discord.ui.View):
         except Exception as e:
             logging.error(f"メッセージ取得/応答中エラー: {e}")
             await interaction.channel.send(
-                f"エラーが発生したため、また後で試してね。"
+                f"{interaction.user.mention} エラーが発生したため、また後で試してね。"
             )
         finally:
             await send_panel(interaction.channel)
