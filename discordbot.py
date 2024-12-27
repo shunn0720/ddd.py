@@ -325,6 +325,8 @@ class CombinedView(discord.ui.View):
             await interaction.channel.send(
                 f"エラーが発生したため、また後で試してね。"
             )
+        finally:
+            await send_panel(interaction.channel)
 
     async def get_and_handle_random_message(self, interaction: discord.Interaction, filter_func: Callable[[Dict[str, Any]], bool]):
       try:
@@ -428,25 +430,38 @@ async def on_message(message: discord.Message):
 # リアクションイベント
 @bot.event
 async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
-    logging.info(f"リアクション追加: message_id={payload.message_id}, emoji_id={payload.emoji.id}, user_id={payload.user_id}")
-    if payload.emoji.is_custom_emoji():
-        conn = get_db_connection()
-        if not conn:
-            return
-        try:
-            with conn.cursor() as cur:
-                cur.execute("SELECT message_id FROM messages WHERE message_id = %s", (payload.message_id,))
-                if not cur.fetchone():
-                    channel = bot.get_channel(payload.channel_id)
-                    if channel:
-                        message = await safe_fetch_message(channel, payload.message_id)
-                        if message:
-                            await save_message_to_db(message)
-                            logging.info(f"メッセージをデータベースに保存しました: message_id={payload.message_id}")
-                        else:
-                            logging.warning(f"メッセージ {payload.message_id} の取得に失敗しました。")
+    if payload.emoji.id is None:
+        logging.warning("カスタム絵文字ではないリアクションが追加されました。")
+        return
+
+    emoji_name = payload.emoji.name
+    emoji_id = payload.emoji.id
+    logging.info(f"カスタム絵文字リアクション追加: {emoji_name} (ID: {emoji_id})")
+
+    if emoji_id == READ_LATER_REACTION_ID:
+        logging.info(f"特定の絵文字 <:b434:{READ_LATER_REACTION_ID}> がリアクションとして追加されました！")
+    if emoji_id == FAVORITE_REACTION_ID:
+        logging.info(f"特定の絵文字 <:b435:{FAVORITE_REACTION_ID}> がリアクションとして追加されました！")
+    if emoji_id == RANDOM_EXCLUDE_REACTION_ID:
+        logging.info(f"特定の絵文字 <:b431:{RANDOM_EXCLUDE_REACTION_ID}> がリアクションとして追加されました！")
+
+    conn = get_db_connection()
+    if not conn:
+        return
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT message_id FROM messages WHERE message_id = %s", (payload.message_id,))
+            if not cur.fetchone():
+                channel = bot.get_channel(payload.channel_id)
+                if channel:
+                    message = await safe_fetch_message(channel, payload.message_id)
+                    if message:
+                        await save_message_to_db(message)
+                        logging.info(f"メッセージをデータベースに保存しました: message_id={payload.message_id}")
                     else:
-                        logging.error(f"チャンネル {payload.channel_id} が見つかりません。")
+                        logging.warning(f"メッセージ {payload.message_id} の取得に失敗しました。")
+                else:
+                    logging.error(f"チャンネル {payload.channel_id} が見つかりません。")
         except Error as e:
             logging.error(
                 f"メッセージ存在確認中エラー: {e} "
@@ -460,9 +475,11 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
 
 @bot.event
 async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
-    logging.info(f"リアクション削除: message_id={payload.message_id}, emoji_id={payload.emoji.id}, user_id={payload.user_id}")
-    if payload.emoji.is_custom_emoji():
-        await update_reactions_in_db(payload.message_id, payload.emoji.id, payload.user_id, add=False)
+    if payload.emoji.id is None:
+        logging.warning("カスタム絵文字ではないリアクションが削除されました。")
+        return
+    logging.info(f"カスタム絵文字リアクション削除: {payload.emoji.name} (ID: {payload.emoji.id})")
+    await update_reactions_in_db(payload.message_id, payload.emoji.id, payload.user_id, add=False)
 
 # メッセージを定期的に保存するタスク
 @tasks.loop(minutes=60)
