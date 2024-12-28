@@ -294,7 +294,6 @@ class CombinedView(discord.ui.View):
         random_message = await get_random_message(THREAD_ID, filter_func)
         await self.handle_selection(interaction, random_message, interaction.user.id)
 
-    # --------------------------------------------------------------------
     # 【青ボタン：ランダム】
     @discord.ui.button(label="ランダム", style=discord.ButtonStyle.primary, row=0, custom_id="blue_random")
     async def blue_random(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -309,7 +308,6 @@ class CombinedView(discord.ui.View):
 
         await self.get_and_handle_random_message(interaction, filter_func)
 
-    # --------------------------------------------------------------------
     # 【青ボタン：あとで読む】
     @discord.ui.button(label="あとで読む", style=discord.ButtonStyle.primary, row=0, custom_id="read_later")
     async def read_later(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -326,7 +324,6 @@ class CombinedView(discord.ui.View):
 
         await self.get_and_handle_random_message(interaction, filter_func)
 
-    # --------------------------------------------------------------------
     # 【青ボタン：お気に入り】
     @discord.ui.button(label="お気に入り", style=discord.ButtonStyle.primary, row=0, custom_id="favorite")
     async def favorite(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -343,7 +340,6 @@ class CombinedView(discord.ui.View):
 
         await self.get_and_handle_random_message(interaction, filter_func)
 
-    # --------------------------------------------------------------------
     # 【赤ボタン：ランダム】
     @discord.ui.button(label="ランダム", style=discord.ButtonStyle.danger, row=1, custom_id="red_random")
     async def red_random(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -360,7 +356,6 @@ class CombinedView(discord.ui.View):
 
         await self.get_and_handle_random_message(interaction, filter_func)
 
-    # --------------------------------------------------------------------
     # 【赤ボタン：あとで読む】
     @discord.ui.button(label="あとで読む", style=discord.ButtonStyle.danger, row=1, custom_id="conditional_read_later")
     async def conditional_read_later(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -437,7 +432,6 @@ async def panel(interaction: discord.Interaction):
 # ------------------------------------------------
 @bot.event
 async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
-    # ★ ここで必ずログを吐く
     logging.info(f"on_raw_reaction_add fired: emoji={payload.emoji}, user_id={payload.user_id}, message_id={payload.message_id}")
 
     channel = bot.get_channel(payload.channel_id)
@@ -453,7 +447,7 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
     # DBに未登録ならその場でINSERT
     ensure_message_in_db(message)
 
-    # カスタム/標準どちらも拾うため、is_custom_emoji() のチェックは行わない
+    # 全てのリアクション（標準/カスタム）を拾う
     await update_reactions_in_db(payload.message_id, payload.emoji.id, payload.user_id, add=True)
 
 # ------------------------------------------------
@@ -461,7 +455,6 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
 # ------------------------------------------------
 @bot.event
 async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
-    # ★ ここで必ずログを吐く
     logging.info(f"on_raw_reaction_remove fired: emoji={payload.emoji}, user_id={payload.user_id}, message_id={payload.message_id}")
 
     channel = bot.get_channel(payload.channel_id)
@@ -474,10 +467,7 @@ async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
         logging.info(f"message_id={payload.message_id} not found in channel.")
         return
 
-    # DBに未登録ならその場でINSERT
     ensure_message_in_db(message)
-
-    # カスタム/標準どちらも拾う
     await update_reactions_in_db(payload.message_id, payload.emoji.id, payload.user_id, add=False)
 
 # ------------------------------------------------
