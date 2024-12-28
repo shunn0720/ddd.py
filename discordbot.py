@@ -104,28 +104,28 @@ def initialize_db():
 initialize_db()
 
 # ------------------------------------------------
-# Discord Botのセットアップ
+# Intent設定
 # ------------------------------------------------
+# リアクションやメッセージコンテンツ等を取得できるように設定する。
 intents = discord.Intents.default()
-intents.messages = True
 intents.message_content = True
+intents.messages = True
 intents.reactions = True
 intents.guilds = True
-intents.members = True  # メンバー情報が必要な場合はTrue
+intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # ------------------------------------------------
 # 定数の定義
 # ------------------------------------------------
-# 必要に応じて自分のサーバーや絵文字IDに合わせて変更してください。
-THREAD_ID = 1288407362318893109  # 取得したい/投稿を集めたいスレッド
-READ_LATER_REACTION_ID = 1304690617405669376  # <:b434:...>
-FAVORITE_REACTION_ID = 1304690627723657267   # <:b435:...>
-RANDOM_EXCLUDE_REACTION_ID = 1289782471197458495  # <:b431:...>
-SPECIFIC_EXCLUDE_AUTHOR = 695096014482440244  # 特定の投稿者(除外したいユーザー)のID
+THREAD_ID = 1288407362318893109  # メッセージを収集するスレッド
+READ_LATER_REACTION_ID = 1304690617405669376     # <:b434:...>
+FAVORITE_REACTION_ID = 1304690627723657267       # <:b435:...>
+RANDOM_EXCLUDE_REACTION_ID = 1289782471197458495 # <:b431:...>
+SPECIFIC_EXCLUDE_AUTHOR = 695096014482440244     # 除外したい投稿者ID
 
-# ユーザーごとに前回選ばれた投稿のauthor_idを記録して、連続投稿を避けるために使用
+# ユーザーごとに前回選ばれた投稿者IDを記録し、連続選出を防ぐ
 last_chosen_authors = {}
 
 # ------------------------------------------------
@@ -140,6 +140,42 @@ async def safe_fetch_message(channel, message_id):
         return await channel.fetch_message(message_id)
     except (discord.NotFound, discord.HTTPException):
         return None
+
+# ------------------------------------------------
+# DBにメッセージがなければ新規挿入する関数
+# ------------------------------------------------
+def ensure_message_in_db(message):
+    """
+    DBに登録されていないメッセージの場合、
+    その場でINSERTする（リアクション管理のため）。
+    """
+    conn = get_db_connection()
+    if not conn:
+        return
+    try:
+        with conn.cursor(cursor_factory=DictCursor) as cur:
+            cur.execute("SELECT id FROM messages WHERE message_id = %s", (message.id,))
+            row = cur.fetchone()
+            if row:
+                # 既にDBに登録済みなら何もしない
+                return
+
+            # 登録されていない場合はINSERT
+            reactions_json = json.dumps({})
+            cur.execute(
+                """
+                INSERT INTO messages (message_id, thread_id, author_id, reactions, content)
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT DO NOTHING
+                """,
+                (message.id, message.channel.id, message.author.id, reactions_json, message.content)
+            )
+            conn.commit()
+            logging.info(f"Inserted new message into DB (message_id={message.id}).")
+    except Error as e:
+        logging.error(f"Error ensuring message in DB: {e}")
+    finally:
+        release_db_connection(conn)
 
 # ------------------------------------------------
 # メッセージのreactionsを更新する関数
@@ -157,7 +193,10 @@ async def update_reactions_in_db(message_id, emoji_id, user_id, add=True):
             cur.execute("SELECT reactions FROM messages WHERE message_id = %s", (message_id,))
             row = cur.fetchone()
             if not row:
+                # DBに該当メッセージがないなら何もしない
+                logging.info(f"No row found for message_id={message_id}, skipping reaction update.")
                 return
+
             reactions = row['reactions'] or {}
             if isinstance(reactions, str):
                 try:
@@ -205,7 +244,8 @@ def user_reacted(msg, reaction_id, user_id):
 # ------------------------------------------------
 async def get_random_message(thread_id, filter_func=None):
     """
-    thread_idに紐づくmessagesテーブル上の投稿をすべて取得し、filter_funcの条件に合うものだけからランダムに1つを返す。
+    thread_idに紐づくmessagesテーブル上の投稿をすべて取得し、
+    filter_funcの条件に合うものだけからランダムに1つ返す。
     """
     conn = get_db_connection()
     if not conn:
@@ -267,8 +307,9 @@ class CombinedView(discord.ui.View):
                 last_chosen_authors[user_id] = random_message['author_id']
                 author_name = await self.get_author_name(random_message['author_id'])
                 await interaction.response.send_message(
-                   f"{interaction.user.mention} さんには、{author_name} さんが投稿したこの本がおすすめだよ！\n"
-                    f"https://discord.com/channels/{interaction.guild.id}/{THREAD_ID}/{random_message['message_id']}"
+                    f"{interaction.user.mention} さん、こちらはいかがでしょう？（投稿者：**{author_name}**）\n"
+                    f"https://discord.com/channels/{interaction.guild.id}/{THREAD_ID}/{random_message['message_id']}",
+                    ephemeral=True
                 )
             else:
                 await interaction.response.send_message(
@@ -294,14 +335,15 @@ class CombinedView(discord.ui.View):
 
     # --------------------------------------------------------------------
     # 【青ボタン：ランダム】
-    # 全体の投稿からランダムで1つ選択。
-    # 除外条件:
-    # 1) 自分の投稿
-    # 2) 特定の投稿者(SPECIFIC_EXCLUDE_AUTHOR)
-    # 3) 連続して同じ投稿者
-    # --------------------------------------------------------------------
     @discord.ui.button(label="ランダム", style=discord.ButtonStyle.primary, row=0, custom_id="blue_random")
     async def blue_random(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """
+        全体の投稿からランダムで1つ選択。
+        除外条件:
+        1) 自分の投稿
+        2) 特定の投稿者(SPECIFIC_EXCLUDE_AUTHOR)
+        3) 連続して同じ投稿者
+        """
         def filter_func(msg):
             if msg['author_id'] == interaction.user.id:
                 return False
@@ -315,16 +357,16 @@ class CombinedView(discord.ui.View):
 
     # --------------------------------------------------------------------
     # 【青ボタン：あとで読む】
-    # ボタンを押したユーザーが<:b434:1304690617405669376>を付けた投稿からランダムで1つ選択。
-    # 除外条件:
-    # 1) 自分の投稿
-    # 2) 特定の投稿者(SPECIFIC_EXCLUDE_AUTHOR)
-    # 3) 連続して同じ投稿者
-    # --------------------------------------------------------------------
     @discord.ui.button(label="あとで読む", style=discord.ButtonStyle.primary, row=0, custom_id="read_later")
     async def read_later(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """
+        ボタンを押したユーザーが<:b434:...>を付けた投稿からランダムで1つ選択。
+        除外条件:
+        1) 自分の投稿
+        2) 特定の投稿者
+        3) 連続して同じ投稿者
+        """
         def filter_func(msg):
-            # <:b434:...> リアクションがない投稿は対象外
             if not user_reacted(msg, READ_LATER_REACTION_ID, interaction.user.id):
                 return False
             if msg['author_id'] == interaction.user.id:
@@ -339,16 +381,16 @@ class CombinedView(discord.ui.View):
 
     # --------------------------------------------------------------------
     # 【青ボタン：お気に入り】
-    # ボタンを押したユーザーが<:b435:1304690627723657267>を付けた投稿からランダムで1つ選択。
-    # 除外条件:
-    # 1) 自分の投稿
-    # 2) 特定の投稿者(SPECIFIC_EXCLUDE_AUTHOR)
-    # 3) 連続して同じ投稿者
-    # --------------------------------------------------------------------
     @discord.ui.button(label="お気に入り", style=discord.ButtonStyle.primary, row=0, custom_id="favorite")
     async def favorite(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """
+        ボタンを押したユーザーが<:b435:...>を付けた投稿からランダムで1つ選択。
+        除外条件:
+        1) 自分の投稿
+        2) 特定の投稿者
+        3) 連続して同じ投稿者
+        """
         def filter_func(msg):
-            # <:b435:...> リアクションがない投稿は対象外
             if not user_reacted(msg, FAVORITE_REACTION_ID, interaction.user.id):
                 return False
             if msg['author_id'] == interaction.user.id:
@@ -363,16 +405,16 @@ class CombinedView(discord.ui.View):
 
     # --------------------------------------------------------------------
     # 【赤ボタン：ランダム】
-    # ユーザーが<:b431:1289782471197458495>を付けた投稿を除外し、それ以外からランダムで1つ選択。
-    # 除外条件:
-    # 1) 自分の投稿
-    # 2) 特定の投稿者(SPECIFIC_EXCLUDE_AUTHOR)
-    # 3) 連続して同じ投稿者
-    # --------------------------------------------------------------------
     @discord.ui.button(label="ランダム", style=discord.ButtonStyle.danger, row=1, custom_id="red_random")
     async def red_random(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """
+        ユーザーが<:b431:...>を付けた投稿を除外、それ以外からランダムで1つ選択。
+        除外条件:
+        1) 自分の投稿
+        2) 特定の投稿者
+        3) 連続して同じ投稿者
+        """
         def filter_func(msg):
-            # <:b431:...> を付けた投稿は除外
             if user_reacted(msg, RANDOM_EXCLUDE_REACTION_ID, interaction.user.id):
                 return False
             if msg['author_id'] == interaction.user.id:
@@ -387,16 +429,16 @@ class CombinedView(discord.ui.View):
 
     # --------------------------------------------------------------------
     # 【赤ボタン：あとで読む】
-    # ボタンを押したユーザーが<:b434:...>を付けた投稿の中から、
-    # ボタンを押したユーザーが<:b431:...> を付けた投稿を除外して1つランダム選択。
-    # さらに自分の投稿・特定投稿者・連続投稿者を除外。
-    # --------------------------------------------------------------------
     @discord.ui.button(label="あとで読む", style=discord.ButtonStyle.danger, row=1, custom_id="conditional_read_later")
     async def conditional_read_later(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """
+        ボタンを押したユーザーが<:b434:...>を付けた投稿の中から、
+        ボタンを押したユーザーが<:b431:...>を付けた投稿を除外して1つランダム選択。
+        さらに自分の投稿・特定投稿者・連続同じ投稿者は除外。
+        """
         def filter_func(msg):
             if not user_reacted(msg, READ_LATER_REACTION_ID, interaction.user.id):
                 return False
-            # <:b431:...> を付けた投稿は除外
             if user_reacted(msg, RANDOM_EXCLUDE_REACTION_ID, interaction.user.id):
                 return False
             if msg['author_id'] == interaction.user.id:
@@ -479,16 +521,26 @@ async def panel(interaction: discord.Interaction):
 @bot.event
 async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
     """
-    リアクションが追加されたら、カスタム絵文字のみDB更新を行う（標準絵文字は対象外）。
+    リアクションが追加されたら、該当メッセージがDBにない場合はINSERTし、
+    カスタム絵文字のみDB更新を行う（標準絵文字は対象外）。
+    必要に応じて標準絵文字も拾いたい場合は if を削除する。
     """
+    logging.info(f"on_raw_reaction_add fired: emoji={payload.emoji}, user={payload.user_id}")
+
     channel = bot.get_channel(payload.channel_id)
     if channel is None:
-        return
-    message = await safe_fetch_message(channel, payload.message_id)
-    if message is None:
+        logging.info("channel is None, cannot process reaction.")
         return
 
-    # もし標準絵文字も拾いたい場合は以下の条件を削除する
+    message = await safe_fetch_message(channel, payload.message_id)
+    if message is None:
+        logging.info(f"message_id={payload.message_id} not found in channel.")
+        return
+
+    # DBにまだ登録されていなかった場合、ここでINSERTしておく
+    ensure_message_in_db(message)
+
+    # カスタム絵文字のみ扱う（標準絵文字を含めたいならここのifを削除 or 条件変更）
     if payload.emoji.is_custom_emoji():
         await update_reactions_in_db(payload.message_id, payload.emoji.id, payload.user_id, add=True)
 
@@ -498,14 +550,23 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
 @bot.event
 async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
     """
-    リアクションが削除されたら、カスタム絵文字のみDB更新を行う。
+    リアクションが削除されたら、同様にメッセージがDBに無い場合はINSERTしてから、
+    カスタム絵文字のみDB更新を行う。
     """
+    logging.info(f"on_raw_reaction_remove fired: emoji={payload.emoji}, user={payload.user_id}")
+
     channel = bot.get_channel(payload.channel_id)
     if channel is None:
+        logging.info("channel is None, cannot process reaction removal.")
         return
+
     message = await safe_fetch_message(channel, payload.message_id)
     if message is None:
+        logging.info(f"message_id={payload.message_id} not found in channel.")
         return
+
+    # DBにまだ登録されていなかった場合、ここでINSERT
+    ensure_message_in_db(message)
 
     if payload.emoji.is_custom_emoji():
         await update_reactions_in_db(payload.message_id, payload.emoji.id, payload.user_id, add=False)
