@@ -16,6 +16,7 @@ import json
 load_dotenv()
 
 # ログ出力の設定
+# デバッグログを細かく見たい場合は level=logging.DEBUG にする
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -110,16 +111,15 @@ intents.members = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # ------------------------------------------------
-# 定数の定義
+# 定数の定義（リアクションIDなど）
 # ------------------------------------------------
-THREAD_ID = 1288407362318893109  # メッセージを収集するスレッド
-READ_LATER_REACTION_ID = 1304690617405669376     # <:b434:...> のID
-FAVORITE_REACTION_ID = 1304690627723657267       # <:b435:...> のID
-RANDOM_EXCLUDE_REACTION_ID = 1289782471197458495 # <:b431:...> のID
-SPECIFIC_EXCLUDE_AUTHOR = 695096014482440244     # 除外したい投稿者ID
+THREAD_ID = 1288407362318893109
+READ_LATER_REACTION_ID = 1304690617405669376     # <:b434:1304690617405669376>
+FAVORITE_REACTION_ID = 1304690627723657267       # <:b435:1304690627723657267>
+RANDOM_EXCLUDE_REACTION_ID = 1289782471197458495 # <:b431:1289782471197458495>
+SPECIFIC_EXCLUDE_AUTHOR = 695096014482440244     # 特定投稿者
 
-# ユーザーごとに前回選ばれた投稿者IDを追跡し、連続投稿を避けるために使用
-# （青ボタン:ランダム だけがこれを活用し、それ以外は無視）
+# ユーザーごとに前回選ばれた投稿者IDを記録する
 last_chosen_authors = {}
 
 # ------------------------------------------------
@@ -217,6 +217,7 @@ def user_reacted(msg, reaction_id, user_id):
 
 # ------------------------------------------------
 # 指定したthread_idのメッセージからランダムに選ぶ関数
+# デバッグ用に、フィルタ前後の件数をログに出す
 # ------------------------------------------------
 async def get_random_message(thread_id, filter_func=None):
     conn = get_db_connection()
@@ -227,6 +228,7 @@ async def get_random_message(thread_id, filter_func=None):
             cur.execute("SELECT * FROM messages WHERE thread_id = %s", (thread_id,))
             messages = cur.fetchall()
 
+            # reactions カラムが str の場合、JSONにパース
             for m in messages:
                 if m['reactions'] is None:
                     m['reactions'] = {}
@@ -236,8 +238,16 @@ async def get_random_message(thread_id, filter_func=None):
                     except json.JSONDecodeError:
                         m['reactions'] = {}
 
+            logging.info(f"[DEBUG] get_random_message: total {len(messages)} messages before filter.")
+
             if filter_func:
-                messages = [m for m in messages if filter_func(m)]
+                filtered_messages = []
+                for m in messages:
+                    if filter_func(m):
+                        filtered_messages.append(m)
+                logging.info(f"[DEBUG] get_random_message: after filter -> {len(filtered_messages)} messages remain.")
+                messages = filtered_messages
+
             if not messages:
                 return None
 
@@ -267,12 +277,11 @@ class CombinedView(discord.ui.View):
     async def handle_selection(self, interaction, random_message, user_id):
         try:
             if random_message:
-                # 連続投稿者除外は青ボタン・ランダム以外では使わないが、
-                # ここで一律に「今回の投稿者」を記録しておく。
+                # 連続投稿者除外のための記録
                 last_chosen_authors[user_id] = random_message['author_id']
                 author_name = await self.get_author_name(random_message['author_id'])
                 await interaction.response.send_message(
-                   f"{interaction.user.mention} さんには、{author_name} さんが投稿したこの本がおすすめだよ！\n"
+                    f"{interaction.user.mention} さん、こちらはいかがでしょう？（投稿者：**{author_name}**）\n"
                     f"https://discord.com/channels/{interaction.guild.id}/{THREAD_ID}/{random_message['message_id']}",
                     ephemeral=True
                 )
@@ -294,99 +303,144 @@ class CombinedView(discord.ui.View):
         random_message = await get_random_message(THREAD_ID, filter_func)
         await self.handle_selection(interaction, random_message, interaction.user.id)
 
-    # --------------------------------------------------------------------
+    # ------------------------------------------------
     # 【青ボタン：ランダム】
-    # ここだけ「自分の投稿除外・特定投稿者除外・連続投稿者除外」が残る
-    # --------------------------------------------------------------------
+    # 全体からランダム1件
+    # 除外条件:
+    #   - 自分の投稿
+    #   - 連続で同じ投稿者
+    # ------------------------------------------------
     @discord.ui.button(label="ランダム", style=discord.ButtonStyle.primary, row=0, custom_id="blue_random")
     async def blue_random(self, interaction: discord.Interaction, button: discord.ui.Button):
         def filter_func(msg):
-            # 自分の投稿を除外
+            # デバッグログを挿入
             if msg['author_id'] == interaction.user.id:
+                logging.debug(f"[blue_random] Excluding msg_id={msg['message_id']}: same user as button presser.")
                 return False
-            # 特定投稿者を除外
-            if msg['author_id'] == SPECIFIC_EXCLUDE_AUTHOR:
-                return False
-            # 連続で同じ投稿者を除外
+
             if last_chosen_authors.get(interaction.user.id) == msg['author_id']:
+                logging.debug(f"[blue_random] Excluding msg_id={msg['message_id']}: same author as previous choice.")
                 return False
+
+            # 通過した場合
+            logging.debug(f"[blue_random] msg_id={msg['message_id']} PASSED.")
             return True
 
         await self.get_and_handle_random_message(interaction, filter_func)
 
-    # --------------------------------------------------------------------
+    # ------------------------------------------------
     # 【青ボタン：あとで読む】
-    # 特定投稿者＆連続投稿者の除外を外す
-    # 自分の投稿だけ除外する
-    # --------------------------------------------------------------------
+    # b434リアクション付きからランダム
+    # 除外条件:
+    #   - 自分の投稿
+    #   - 連続で同じ投稿者
+    # ------------------------------------------------
     @discord.ui.button(label="あとで読む", style=discord.ButtonStyle.primary, row=0, custom_id="read_later")
     async def read_later(self, interaction: discord.Interaction, button: discord.ui.Button):
         def filter_func(msg):
-            # ボタンを押したユーザーが<:b434:...>を付けた投稿のみ対象
             if not user_reacted(msg, READ_LATER_REACTION_ID, interaction.user.id):
+                logging.debug(f"[read_later] Excluding msg_id={msg['message_id']}: user has no b434 reaction here.")
                 return False
-            # 自分の投稿は除外
+
             if msg['author_id'] == interaction.user.id:
+                logging.debug(f"[read_later] Excluding msg_id={msg['message_id']}: user is author.")
                 return False
-            # 特定投稿者・連続投稿者除外はしない
+
+            if last_chosen_authors.get(interaction.user.id) == msg['author_id']:
+                logging.debug(f"[read_later] Excluding msg_id={msg['message_id']}: same author as previous.")
+                return False
+
+            logging.debug(f"[read_later] msg_id={msg['message_id']} PASSED.")
             return True
 
         await self.get_and_handle_random_message(interaction, filter_func)
 
-    # --------------------------------------------------------------------
+    # ------------------------------------------------
     # 【青ボタン：お気に入り】
-    # 特定投稿者＆連続投稿者の除外を外す
-    # 自分の投稿だけ除外
-    # --------------------------------------------------------------------
+    # b435リアクション付きからランダム
+    # 除外条件:
+    #   - 自分の投稿
+    #   - 連続で同じ投稿者
+    # ------------------------------------------------
     @discord.ui.button(label="お気に入り", style=discord.ButtonStyle.primary, row=0, custom_id="favorite")
     async def favorite(self, interaction: discord.Interaction, button: discord.ui.Button):
         def filter_func(msg):
             if not user_reacted(msg, FAVORITE_REACTION_ID, interaction.user.id):
+                logging.debug(f"[favorite] Excluding msg_id={msg['message_id']}: user has no b435 reaction.")
                 return False
-            # 自分の投稿は除外
+
             if msg['author_id'] == interaction.user.id:
+                logging.debug(f"[favorite] Excluding msg_id={msg['message_id']}: user is author.")
                 return False
-            # 特定投稿者・連続投稿者除外はしない
+
+            if last_chosen_authors.get(interaction.user.id) == msg['author_id']:
+                logging.debug(f"[favorite] Excluding msg_id={msg['message_id']}: same author as previous.")
+                return False
+
+            logging.debug(f"[favorite] msg_id={msg['message_id']} PASSED.")
             return True
 
         await self.get_and_handle_random_message(interaction, filter_func)
 
-    # --------------------------------------------------------------------
+    # ------------------------------------------------
     # 【赤ボタン：ランダム】
-    # 特定投稿者＆連続投稿者除外を外し
-    # ただし <:b431:...> を付けた投稿を除外
-    # 自分の投稿は除外
-    # --------------------------------------------------------------------
+    # <:b431:...>を付けた投稿は除外、それ以外からランダム
+    # 除外条件:
+    #   - 自分の投稿
+    #   - 特定投稿者
+    #   - 連続で同じ投稿者
+    # ------------------------------------------------
     @discord.ui.button(label="ランダム", style=discord.ButtonStyle.danger, row=1, custom_id="red_random")
     async def red_random(self, interaction: discord.Interaction, button: discord.ui.Button):
         def filter_func(msg):
-            # <:b431:...> を付けた投稿は除外
             if user_reacted(msg, RANDOM_EXCLUDE_REACTION_ID, interaction.user.id):
+                logging.debug(f"[red_random] Excluding msg_id={msg['message_id']}: user has b431 reaction here.")
                 return False
-            # 自分の投稿は除外
+
             if msg['author_id'] == interaction.user.id:
+                logging.debug(f"[red_random] Excluding msg_id={msg['message_id']}: same user as button presser.")
                 return False
-            # 特定投稿者・連続投稿者除外はしない
+
+            if msg['author_id'] == SPECIFIC_EXCLUDE_AUTHOR:
+                logging.debug(f"[red_random] Excluding msg_id={msg['message_id']}: specific exclude author.")
+                return False
+
+            if last_chosen_authors.get(interaction.user.id) == msg['author_id']:
+                logging.debug(f"[red_random] Excluding msg_id={msg['message_id']}: same author as previous.")
+                return False
+
+            logging.debug(f"[red_random] msg_id={msg['message_id']} PASSED.")
             return True
 
         await self.get_and_handle_random_message(interaction, filter_func)
 
-    # --------------------------------------------------------------------
+    # ------------------------------------------------
     # 【赤ボタン：あとで読む】
-    # 特定投稿者＆連続投稿者除外を外し
-    # <:b434:...> だけを対象にし、 <:b431:...> を付けた投稿を除外
-    # 自分の投稿は除外
-    # --------------------------------------------------------------------
+    # b434 を付けた投稿のうち、b431 を付けた投稿は除外
+    # 除外条件:
+    #   - 自分の投稿
+    #   - 連続で同じ投稿者
+    # ------------------------------------------------
     @discord.ui.button(label="あとで読む", style=discord.ButtonStyle.danger, row=1, custom_id="conditional_read_later")
     async def conditional_read_later(self, interaction: discord.Interaction, button: discord.ui.Button):
         def filter_func(msg):
             if not user_reacted(msg, READ_LATER_REACTION_ID, interaction.user.id):
+                logging.debug(f"[red_read_later] Excluding msg_id={msg['message_id']}: user has no b434 reaction.")
                 return False
+
             if user_reacted(msg, RANDOM_EXCLUDE_REACTION_ID, interaction.user.id):
+                logging.debug(f"[red_read_later] Excluding msg_id={msg['message_id']}: user has b431 reaction.")
                 return False
-            # 自分の投稿は除外
+
             if msg['author_id'] == interaction.user.id:
+                logging.debug(f"[red_read_later] Excluding msg_id={msg['message_id']}: user is author.")
                 return False
+
+            if last_chosen_authors.get(interaction.user.id) == msg['author_id']:
+                logging.debug(f"[red_read_later] Excluding msg_id={msg['message_id']}: same author as previous.")
+                return False
+
+            logging.debug(f"[red_read_later] msg_id={msg['message_id']} PASSED.")
             return True
 
         await self.get_and_handle_random_message(interaction, filter_func)
@@ -418,14 +472,18 @@ async def send_panel(channel):
         logging.error(f"Error sending panel message: {e}")
 
 def create_panel_embed():
+    """
+    embedの内容は前回のまま変更なし
+    """
     embed = discord.Embed(
         title="🎯ｴﾛ漫画ﾙｰﾚｯﾄ",
         description=(
             "botがｴﾛ漫画を選んでくれるよ！\n\n"
-            "【青ボタン：ランダム】自分・特定投稿者・連続投稿者を除外\n"
-            "【青ボタン：あとで読む・お気に入り】自分投稿のみ除外\n"
-            "【赤ボタン：ランダム】 <:b431:...>付き投稿＋自分投稿を除外\n"
-            "【赤ボタン：あとで読む】 <:b434:...>付き投稿から <:b431:...>付き投稿＋自分投稿を除外\n"
+            "🔵：自分の<:b431:1289782471197458495>を除外しない\n"
+            "🔴：自分の<:b431:1289782471197458495>を除外する\n\n"
+            "ランダム：全体から選ぶ\n"
+            "あとで読む：<:b434:1304690617405669376>を付けた投稿から選ぶ\n"
+            "お気に入り：<:b435:1304690627723657267>を付けた投稿から選ぶ"
         ),
         color=0xFF69B4
     )
@@ -507,6 +565,7 @@ async def save_all_messages_to_db():
     channel = bot.get_channel(THREAD_ID)
     if channel:
         try:
+            # デバッグ用に取得数を増やすならここを調整
             limit_count = 200
             messages = []
             async for message in channel.history(limit=limit_count):
@@ -526,6 +585,7 @@ async def bulk_save_messages_to_db(messages):
     try:
         data = []
         for message in messages:
+            # まだreactionsは空で登録し、on_raw_reaction_add等で更新
             reactions_json = json.dumps({})
             data.append((message.id, THREAD_ID, message.author.id, reactions_json, message.content))
 
