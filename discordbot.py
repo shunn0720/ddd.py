@@ -209,6 +209,8 @@ async def get_random_message(thread_id, filter_func=None, button_name="N/A"):
                         m['reactions'] = json.loads(m['reactions']) or {}
                     except json.JSONDecodeError:
                         m['reactions'] = {}
+                # デバッグ用のログ追加
+                logging.debug(f"DB reactions for msg_id={m['message_id']}: {m['reactions']}")
 
             logging.info(f"[DEBUG] [{button_name}] get_random_message: total {len(messages)} messages before filter.")
             if filter_func:
@@ -251,9 +253,8 @@ class CombinedView(discord.ui.View):
                 last_chosen_authors[user_id] = random_message['author_id']
                 author_name = await self.get_author_name(random_message['author_id'])
                 await interaction.response.send_message(
-                    f"{interaction.user.mention} さん、こちらはいかがでしょう？（投稿者：**{author_name}**）\n"
-                    f"https://discord.com/channels/{interaction.guild.id}/{THREAD_ID}/{random_message['message_id']}",
-                    ephemeral=True
+                   f"{interaction.user.mention} さんには、{author_name} さんが投稿したこの本がおすすめだよ！\n"
+                    f"https://discord.com/channels/{interaction.guild.id}/{THREAD_ID}/{random_message['message_id']}"
                 )
             else:
                 await interaction.response.send_message(
@@ -308,8 +309,11 @@ class CombinedView(discord.ui.View):
     async def favorite(self, interaction: discord.Interaction, button: discord.ui.Button):
         button_name = "blue_favorite"
         def filter_func(msg):
+            # デバッグ用のログ追加
+            logging.debug(f"DB reactions for msg_id={msg['message_id']}: {msg['reactions']}")
+            
             if not user_reacted(msg, FAVORITE_REACTION_ID, interaction.user.id):
-                logging.debug(f"[{button_name}] Excluding msg_id={msg['message_id']}: no b435 from user.")
+                logging.debug(f"Excluding msg_id={msg['message_id']}: reaction check failed, FAVORITE_REACTION_ID={FAVORITE_REACTION_ID}, user_id={interaction.user.id}, reactions={msg['reactions']}")
                 return False
             if msg['author_id'] == interaction.user.id:
                 logging.debug(f"[{button_name}] Excluding msg_id={msg['message_id']}: same user.")
