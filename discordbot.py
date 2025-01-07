@@ -313,7 +313,6 @@ class CombinedView(discord.ui.View):
     @discord.ui.button(label="ランダム", style=discord.ButtonStyle.primary, row=0, custom_id="blue_random")
     async def blue_random(self, interaction: discord.Interaction, button: discord.ui.Button):
         button_name = "blue_random"
-
         def filter_func(msg):
             if msg['author_id'] == interaction.user.id:
                 logging.debug(f"[{button_name}] Excluding msg_id={msg['message_id']}: same user.")
@@ -326,7 +325,6 @@ class CombinedView(discord.ui.View):
     @discord.ui.button(label="あとで読む", style=discord.ButtonStyle.primary, row=0, custom_id="read_later")
     async def read_later(self, interaction: discord.Interaction, button: discord.ui.Button):
         button_name = "blue_read_later"
-
         def filter_func(msg):
             if not user_reacted(msg, READ_LATER_REACTION_ID, interaction.user.id):
                 logging.debug(f"[{button_name}] Excluding msg_id={msg['message_id']}: no b434 from user.")
@@ -342,7 +340,6 @@ class CombinedView(discord.ui.View):
     @discord.ui.button(label="お気に入り", style=discord.ButtonStyle.primary, row=0, custom_id="favorite")
     async def favorite(self, interaction: discord.Interaction, button: discord.ui.Button):
         button_name = "blue_favorite"
-
         def filter_func(msg):
             logging.debug(f"DB reactions for msg_id={msg['message_id']}: {msg['reactions']}")
             if not user_reacted(msg, FAVORITE_REACTION_ID, interaction.user.id):
@@ -362,9 +359,7 @@ class CombinedView(discord.ui.View):
     @discord.ui.button(label="ランダム", style=discord.ButtonStyle.danger, row=1, custom_id="red_random")
     async def red_random(self, interaction: discord.Interaction, button: discord.ui.Button):
         button_name = "red_random"
-
         def filter_func(msg):
-            # 追加のデバッグログ：何が原因で除外されたか
             if user_reacted(msg, RANDOM_EXCLUDE_ID, interaction.user.id):
                 logging.debug(f"[{button_name}] Excluding msg_id={msg['message_id']}: user has b431.")
                 return False
@@ -382,7 +377,6 @@ class CombinedView(discord.ui.View):
     @discord.ui.button(label="あとで読む", style=discord.ButtonStyle.danger, row=1, custom_id="conditional_read_later")
     async def conditional_read_later(self, interaction: discord.Interaction, button: discord.ui.Button):
         button_name = "red_read_later"
-
         def filter_func(msg):
             if not user_reacted(msg, READ_LATER_REACTION_ID, interaction.user.id):
                 logging.debug(f"[{button_name}] Excluding msg_id={msg['message_id']}: no b434 from user.")
@@ -427,9 +421,9 @@ def create_panel_embed():
             "botがエロ漫画を選んでくれるよ！\n\n"
             "🔵：自分の <:b431:1289782471197458495> を除外しない\n"
             "🔴：自分の <:b431:1289782471197458495> を除外する\n\n"
-            "ランダム：全体からランダム\n"
-            "あとで読む：<:b434:1304690617405669376> を付けた投稿\n"
-            "お気に入り：<:b435:1304690627723657267> を付けた投稿"
+            "**ランダム**：全体から選ぶ\n"
+            "**あとで読む**：<:b434:1304690617405669376> を付けた投稿\n"
+            "**お気に入り**：<:b435:1304690627723657267> を付けた投稿"
         ),
         color=0xFF69B4
     )
@@ -573,14 +567,14 @@ async def on_ready():
 ########################
 # メッセージ履歴同期タスク
 ########################
-@tasks.loop(minutes=5)  # 5分おき
+@tasks.loop(minutes=5)
 async def save_all_messages_to_db_task():
     await save_all_messages_to_db()
 
 async def save_all_messages_to_db():
     """
     メッセージをページングで取得し、DBに保存する。
-    バッチサイズを小さくしてAPI制限を回避しやすく。
+    -- 修正箇所: 'before'に message.id ではなく 'Message' オブジェクトを渡す --
     """
     channel = bot.get_channel(THREAD_ID)
     if channel is None:
@@ -589,24 +583,29 @@ async def save_all_messages_to_db():
 
     all_messages = []
     last_msg = None
-    batch_size = 50  # バッチサイズさらに小さく
+    batch_size = 50  # バッチサイズを小さめに
     try:
         while True:
             batch = []
+            # 'before' にはメッセージオブジェクトを渡す
             async for msg in channel.history(limit=batch_size, before=last_msg):
                 batch.append(msg)
+
             if not batch:
                 break
 
             all_messages.extend(batch)
-            last_msg = batch[-1].id
 
-            # --- 適度にスリープを入れて、API制限を回避しやすくする ---
+            # ページングするために、"last_msg" はメッセージオブジェクト
+            last_msg = batch[-1]
+
+            # API制限を回避するためのスリープ
             await asyncio.sleep(1.0)
 
         if all_messages:
             await bulk_save_messages_to_db(all_messages)
         logging.info(f"Saved total {len(all_messages)} messages to the database (paging).")
+
     except discord.HTTPException as e:
         logging.error(f"Error fetching message history in paging: {e}")
 
@@ -622,7 +621,6 @@ async def bulk_save_messages_to_db(messages):
                 if reaction.custom_emoji:
                     emoji_id = reaction.emoji.id
                     if emoji_id:
-                        # 詳細ログでユーザー取得を確認
                         logging.debug(f"Fetching users for reaction {emoji_id} in message {message.id} (count={reaction.count})")
                         try:
                             users = [user.id async for user in reaction.users()]
