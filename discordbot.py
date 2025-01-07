@@ -35,6 +35,16 @@ logging.basicConfig(
 ########################
 DATABASE_URL = os.getenv("DATABASE_URL")
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
+THREAD_ID = os.getenv("THREAD_ID")
+
+if THREAD_ID is None:
+    logging.error("THREAD_IDが設定されていません。環境変数を確認してください。")
+    exit(1)  # ボットを終了
+try:
+    THREAD_ID = int(THREAD_ID)
+except ValueError:
+    logging.error("THREAD_IDが無効な値です。正しいチャンネルIDを設定してください。")
+    exit(1)  # ボットを終了
 
 ########################
 # リアクションIDの定義
@@ -462,11 +472,14 @@ async def check_reactions(interaction: discord.Interaction, message_id: str):
                 color=0x00FF00
             )
             for emoji_id, user_ids in reactions.items():
-                emoji = bot.get_emoji(int(emoji_id))
-                if emoji:
-                    emoji_str = str(emoji)
-                else:
-                    emoji_str = f"Unknown Emoji ({emoji_id})"
+                try:
+                    emoji = bot.get_emoji(int(emoji_id))
+                    if emoji:
+                        emoji_str = str(emoji)
+                    else:
+                        emoji_str = f"Unknown Emoji ({emoji_id})"
+                except ValueError:
+                    emoji_str = f"Invalid Emoji ID ({emoji_id})"
                 embed.add_field(name=emoji_str, value=f"{len(user_ids)} 人がリアクションしました。", inline=False)
             await interaction.response.send_message(embed=embed, ephemeral=True)
     except Error as e:
