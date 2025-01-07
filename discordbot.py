@@ -16,10 +16,13 @@ import json
 load_dotenv()
 
 ########################
-# ログレベルを DEBUG に
+# ログレベルの設定 (DEBUG_MODE 環境変数で制御)
 ########################
+DEBUG_MODE = os.getenv("DEBUG_MODE", "False").lower() in ("true", "1", "t")
+log_level = logging.DEBUG if DEBUG_MODE else logging.INFO
+
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=log_level,
     format="%(asctime)s [%(levelname)s] %(message)s",
     handlers=[
         logging.FileHandler("bot.log"),
@@ -32,6 +35,20 @@ logging.basicConfig(
 ########################
 DATABASE_URL = os.getenv("DATABASE_URL")
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
+
+########################
+# リアクションIDの定義
+########################
+REACTIONS = {
+    "b434": 1304690617405669376,  # <:b434:1304690617405669376>
+    "b435": 1304690627723657267,  # <:b435:1304690627723657267>
+    "b431": 1289782471197458495   # <:b431:1289782471197458495>
+}
+
+READ_LATER_REACTION_ID = REACTIONS["b434"]
+FAVORITE_REACTION_ID = REACTIONS["b435"]
+RANDOM_EXCLUDE_REACTION_ID = REACTIONS["b431"]
+SPECIFIC_EXCLUDE_AUTHOR = 695096014482440244  # 特定投稿者
 
 ########################
 # DB接続プール
@@ -77,7 +94,7 @@ def initialize_db():
                 message_id BIGINT NOT NULL UNIQUE,
                 thread_id BIGINT NOT NULL,
                 author_id BIGINT NOT NULL,
-                reactions JSONB,
+                reactions JSONB DEFAULT '{}',
                 content TEXT
             )
             """)
@@ -100,18 +117,6 @@ intents.members = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 ########################
-# 定数の定義
-########################
-THREAD_ID = 1288407362318893109
-READ_LATER_REACTION_ID = 1304690617405669376     # b434
-FAVORITE_REACTION_ID = 1304690627723657267       # b435
-RANDOM_EXCLUDE_REACTION_ID = 1289782471197458495 # b431
-SPECIFIC_EXCLUDE_AUTHOR = 695096014482440244     # 特定投稿者
-
-# 連続投稿者除外しないので last_chosen_authors は不要だが、参考までに残しておく（使わない）
-last_chosen_authors = {}
-
-########################
 # ヘルパー関数
 ########################
 async def safe_fetch_message(channel, message_id):
@@ -120,7 +125,7 @@ async def safe_fetch_message(channel, message_id):
     except (discord.NotFound, discord.HTTPException):
         return None
 
-def ensure_message_in_db(message):
+async def ensure_message_in_db(message):
     conn = get_db_connection()
     if not conn:
         return
@@ -130,7 +135,15 @@ def ensure_message_in_db(message):
             row = cur.fetchone()
             if row:
                 return
-            reactions_json = json.dumps({})
+            # Initialize reactions with existing reactions from the message
+            reactions_dict = {}
+            for reaction in message.reactions:
+                if reaction.custom_emoji:
+                    emoji_id = reaction.emoji.id
+                    if emoji_id:
+                        users = [user.id async for user in reaction.users()]
+                        reactions_dict[str(emoji_id)] = users
+            reactions_json = json.dumps(reactions_dict)
             cur.execute(
                 """
                 INSERT INTO messages (message_id, thread_id, author_id, reactions, content)
@@ -168,8 +181,10 @@ async def update_reactions_in_db(message_id, emoji_id, user_id, add=True):
 
             if add and user_id not in user_list:
                 user_list.append(user_id)
+                logging.debug(f"Added user_id={user_id} to reaction_id={emoji_id} for message_id={message_id}.")
             elif not add and user_id in user_list:
                 user_list.remove(user_id)
+                logging.debug(f"Removed user_id={user_id} from reaction_id={emoji_id} for message_id={message_id}.")
 
             reactions[str_emoji_id] = user_list
             cur.execute(
@@ -177,6 +192,7 @@ async def update_reactions_in_db(message_id, emoji_id, user_id, add=True):
                 (json.dumps(reactions), message_id)
             )
             conn.commit()
+            logging.debug(f"Updated reactions for message_id={message_id}: {reactions}")
     except Error as e:
         logging.error(f"Error updating reactions in DB: {e}")
     finally:
@@ -190,6 +206,7 @@ def user_reacted(msg, reaction_id, user_id):
         except json.JSONDecodeError:
             reaction_data = {}
     users = reaction_data.get(str(reaction_id), [])
+    logging.debug(f"user_reacted: reaction_id={reaction_id}, user_id={user_id}, users={users}")
     return user_id in users
 
 async def get_random_message(thread_id, filter_func=None, button_name="N/A"):
@@ -258,7 +275,8 @@ class CombinedView(discord.ui.View):
                 )
             else:
                 await interaction.response.send_message(
-                    f"{interaction.user.mention} さん、該当する投稿が見つかりませんでした。",
+                    f"{interaction.user.mention} さん、該当する投稿が見つかりませんでした。\n"
+                    f"フィルター条件に一致する投稿が存在しないか、リアクションが不足しています。",
                     ephemeral=True
                 )
         except Exception as e:
@@ -311,7 +329,7 @@ class CombinedView(discord.ui.View):
         def filter_func(msg):
             # デバッグ用のログ追加
             logging.debug(f"DB reactions for msg_id={msg['message_id']}: {msg['reactions']}")
-            
+
             if not user_reacted(msg, FAVORITE_REACTION_ID, interaction.user.id):
                 logging.debug(f"Excluding msg_id={msg['message_id']}: reaction check failed, FAVORITE_REACTION_ID={FAVORITE_REACTION_ID}, user_id={interaction.user.id}, reactions={msg['reactions']}")
                 return False
@@ -408,9 +426,66 @@ async def panel(interaction: discord.Interaction):
     else:
         await interaction.response.send_message("エラー: チャンネルが取得できませんでした。", ephemeral=True)
 
+@bot.tree.command(name="check_reactions", description="特定のメッセージのリアクションを確認します。")
+async def check_reactions(interaction: discord.Interaction, message_id: str):
+    """特定のメッセージIDのリアクション情報を表示します。"""
+    try:
+        msg_id = int(message_id)
+    except ValueError:
+        await interaction.response.send_message("無効なメッセージIDです。", ephemeral=True)
+        return
+
+    conn = get_db_connection()
+    if not conn:
+        await interaction.response.send_message("データベース接続に失敗しました。", ephemeral=True)
+        return
+
+    try:
+        with conn.cursor(cursor_factory=DictCursor) as cur:
+            cur.execute("SELECT reactions FROM messages WHERE message_id = %s", (msg_id,))
+            row = cur.fetchone()
+            if not row:
+                await interaction.response.send_message("指定されたメッセージはデータベースに存在しません。", ephemeral=True)
+                return
+            reactions = row['reactions'] or {}
+            if isinstance(reactions, str):
+                try:
+                    reactions = json.loads(reactions)
+                except json.JSONDecodeError:
+                    reactions = {}
+            if not reactions:
+                await interaction.response.send_message("このメッセージにはリアクションがありません。", ephemeral=True)
+                return
+
+            embed = discord.Embed(
+                title=f"Message ID: {msg_id} のリアクション情報",
+                color=0x00FF00
+            )
+            for emoji_id, user_ids in reactions.items():
+                emoji = bot.get_emoji(int(emoji_id))
+                if emoji:
+                    emoji_str = str(emoji)
+                else:
+                    emoji_str = f"Unknown Emoji ({emoji_id})"
+                embed.add_field(name=emoji_str, value=f"{len(user_ids)} 人がリアクションしました。", inline=False)
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+    except Error as e:
+        logging.error(f"Error fetching reactions for message_id={msg_id}: {e}")
+        await interaction.response.send_message("リアクション情報の取得中にエラーが発生しました。", ephemeral=True)
+    finally:
+        release_db_connection(conn)
+
 @bot.event
 async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
     logging.info(f"on_raw_reaction_add fired: emoji={payload.emoji}, user_id={payload.user_id}, message_id={payload.message_id}")
+    # Ignore bot's own reactions
+    if payload.user_id == bot.user.id:
+        logging.debug("Reaction added by the bot itself; ignoring.")
+        return
+    # Check if the emoji is one of the target reactions
+    if payload.emoji.id not in REACTIONS.values():
+        logging.debug(f"Ignoring reaction with emoji_id={payload.emoji.id} not in target reactions.")
+        return
     channel = bot.get_channel(payload.channel_id)
     if channel is None:
         logging.info("channel is None, cannot process reaction.")
@@ -419,12 +494,20 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
     if message is None:
         logging.info(f"message_id={payload.message_id} not found in channel.")
         return
-    ensure_message_in_db(message)
+    await ensure_message_in_db(message)
     await update_reactions_in_db(payload.message_id, payload.emoji.id, payload.user_id, add=True)
 
 @bot.event
 async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
     logging.info(f"on_raw_reaction_remove fired: emoji={payload.emoji}, user_id={payload.user_id}, message_id={payload.message_id}")
+    # Ignore bot's own reactions
+    if payload.user_id == bot.user.id:
+        logging.debug("Reaction removed by the bot itself; ignoring.")
+        return
+    # Check if the emoji is one of the target reactions
+    if payload.emoji.id not in REACTIONS.values():
+        logging.debug(f"Ignoring reaction removal with emoji_id={payload.emoji.id} not in target reactions.")
+        return
     channel = bot.get_channel(payload.channel_id)
     if channel is None:
         logging.info("channel is None, cannot process reaction removal.")
@@ -433,7 +516,7 @@ async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
     if message is None:
         logging.info(f"message_id={payload.message_id} not found in channel.")
         return
-    ensure_message_in_db(message)
+    await ensure_message_in_db(message)
     await update_reactions_in_db(payload.message_id, payload.emoji.id, payload.user_id, add=False)
 
 @bot.event
@@ -473,13 +556,25 @@ async def bulk_save_messages_to_db(messages):
     try:
         data = []
         for message in messages:
-            reactions_json = json.dumps({})
+            # Fetch reactions for the message
+            reactions_dict = {}
+            for reaction in message.reactions:
+                if reaction.custom_emoji:
+                    emoji_id = reaction.emoji.id
+                    if emoji_id:
+                        try:
+                            users = [user.id async for user in reaction.users()]
+                        except discord.HTTPException as e:
+                            logging.error(f"Error fetching users for reaction {emoji_id} in message {message.id}: {e}")
+                            users = []
+                        reactions_dict[str(emoji_id)] = users
+            reactions_json = json.dumps(reactions_dict)
             data.append((message.id, THREAD_ID, message.author.id, reactions_json, message.content))
         with conn.cursor() as cur:
             cur.executemany("""
                 INSERT INTO messages (message_id, thread_id, author_id, reactions, content)
                 VALUES (%s, %s, %s, %s, %s)
-                ON CONFLICT (message_id) DO UPDATE SET content = EXCLUDED.content
+                ON CONFLICT (message_id) DO UPDATE SET content = EXCLUDED.content, reactions = EXCLUDED.reactions
             """, data)
             conn.commit()
         logging.info(f"Bulk inserted or updated {len(messages)} messages.")
