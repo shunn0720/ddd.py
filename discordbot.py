@@ -51,7 +51,7 @@ except ValueError:
 # リアクションIDの定義
 ########################
 REACTIONS = {
-    "b431": 1289782471197458495,  # <:b431:1289782471197458495> (ランダム除外用)
+    "b431": 1289782471197458495,  # <:b431:1289782471197458495> (ランダム除外)
     "b434": 1304690617405669376,  # <:b434:1304690617405669376> (あとで読む)
     "b435": 1304690627723657267,  # <:b435:1304690627723657267> (お気に入り)
 }
@@ -59,7 +59,7 @@ REACTIONS = {
 READ_LATER_REACTION_ID = REACTIONS["b434"]     # あとで読む
 FAVORITE_REACTION_ID   = REACTIONS["b435"]     # お気に入り
 RANDOM_EXCLUDE_ID      = REACTIONS["b431"]     # ランダム除外
-SPECIFIC_EXCLUDE_USER  = 695096014482440244    # 特定投稿者がいる場合のID(例)
+SPECIFIC_EXCLUDE_USER  = 695096014482440244    # 特定投稿者ID（例）
 
 ########################
 # DB接続プール
@@ -119,7 +119,7 @@ def initialize_db():
 initialize_db()
 
 ########################
-# Botインテンツの設定
+# Bot インテンツの設定
 ########################
 intents = discord.Intents.default()
 intents.message_content = True
@@ -153,7 +153,7 @@ async def ensure_message_in_db(message):
             cur.execute("SELECT id FROM messages WHERE message_id = %s", (message.id,))
             row = cur.fetchone()
             if row:
-                return
+                return  # 既に存在する
 
             reactions_dict = {}
             for reaction in message.reactions:
@@ -168,8 +168,7 @@ async def ensure_message_in_db(message):
                 INSERT INTO messages (message_id, thread_id, author_id, reactions, content)
                 VALUES (%s, %s, %s, %s, %s)
                 ON CONFLICT DO NOTHING
-            """,
-            (message.id, message.channel.id, message.author.id, reactions_json, message.content))
+            """, (message.id, message.channel.id, message.author.id, reactions_json, message.content))
             conn.commit()
             logging.info(f"Inserted new message into DB (message_id={message.id}).")
     except Error as e:
@@ -237,15 +236,13 @@ async def get_random_message(thread_id, filter_func=None, button_name="N/A"):
     conn = get_db_connection()
     if not conn:
         return None
-
     try:
         with conn.cursor(cursor_factory=DictCursor) as cur:
-            # 古い投稿も含めて全部取得 (制限なし)
+            # 全メッセージ取得 (古い投稿も含む)
             cur.execute("SELECT * FROM messages WHERE thread_id = %s", (thread_id,))
-            all_rows = cur.fetchall()
+            rows = cur.fetchall()
 
-            # JSONパース
-            for m in all_rows:
+            for m in rows:
                 if m['reactions'] is None:
                     m['reactions'] = {}
                 elif isinstance(m['reactions'], str):
@@ -254,19 +251,19 @@ async def get_random_message(thread_id, filter_func=None, button_name="N/A"):
                     except json.JSONDecodeError:
                         m['reactions'] = {}
 
-            logging.info(f"[DEBUG] [{button_name}] get_random_message: total {len(all_rows)} messages before filter.")
+            logging.info(f"[DEBUG] [{button_name}] get_random_message: total {len(rows)} messages before filter.")
 
             if filter_func:
                 filtered = []
-                for row in all_rows:
+                for row in rows:
                     if filter_func(row):
                         filtered.append(row)
                 logging.info(f"[DEBUG] [{button_name}] get_random_message: after filter -> {len(filtered)} messages remain.")
-                all_rows = filtered
+                rows = filtered
 
-            if not all_rows:
+            if not rows:
                 return None
-            return random.choice(all_rows)
+            return random.choice(rows)
     except Error as e:
         logging.error(f"Error fetching random message: {e}")
         return None
@@ -293,38 +290,33 @@ class CombinedView(discord.ui.View):
             return f"UnknownUser({author_id})"
 
     async def handle_selection(self, interaction, random_message, user_id):
-        try:
-            if random_message:
-                last_chosen_authors[user_id] = random_message['author_id']
-                author_name = await self.get_author_name(random_message['author_id'])
-                await interaction.response.send_message(
-                    f"{interaction.user.mention} さんには、{author_name} さんの投稿がおすすめです！\n"
-                    f"https://discord.com/channels/{interaction.guild_id}/{THREAD_ID}/{random_message['message_id']}"
-                )
-            else:
-                await interaction.response.send_message(
-                    f"{interaction.user.mention} さん、該当する投稿が見つかりませんでした。\n"
-                    f"古い投稿も含めてフィルタしましたが、条件に合うものが無いようです。",
-                    ephemeral=True
-                )
-        except Exception as e:
-            logging.error(f"Error handling selection: {e}")
-            await interaction.response.send_message(
-                f"エラーが発生しました: {e}",
-                ephemeral=True
+        if random_message:
+            last_chosen_authors[user_id] = random_message['author_id']
+            author_name = await self.get_author_name(random_message['author_id'])
+            # --- 修正ポイント: 「返信形式」ではなく「チャンネルに単純に送信」 ---
+            await interaction.channel.send(
+                f"{interaction.user.mention} さんには、{author_name} さんの投稿がおすすめです！\n"
+                f"https://discord.com/channels/{interaction.guild_id}/{THREAD_ID}/{random_message['message_id']}"
             )
-        finally:
-            await send_panel(interaction.channel)
+        else:
+            await interaction.channel.send(
+                f"{interaction.user.mention} さん、該当する投稿が見つかりませんでした。"
+            )
+
+        # パネルを再送
+        await send_panel(interaction.channel)
 
     async def get_and_handle_random_message(self, interaction, filter_func, button_name="N/A"):
         random_msg = await get_random_message(THREAD_ID, filter_func=filter_func, button_name=button_name)
         await self.handle_selection(interaction, random_msg, interaction.user.id)
 
-    # --- 青ボタン：ランダム
+    # --- 青ボタン：ランダム ---
     @discord.ui.button(label="ランダム", style=discord.ButtonStyle.primary, row=0, custom_id="blue_random")
     async def blue_random(self, interaction: discord.Interaction, button: discord.ui.Button):
         button_name = "blue_random"
+
         def filter_func(msg):
+            # 自分の投稿を除外
             if msg['author_id'] == interaction.user.id:
                 logging.debug(f"[{button_name}] Excluding msg_id={msg['message_id']}: same user.")
                 return False
@@ -332,10 +324,11 @@ class CombinedView(discord.ui.View):
 
         await self.get_and_handle_random_message(interaction, filter_func, button_name=button_name)
 
-    # --- 青ボタン：あとで読む (b434)
+    # --- 青ボタン：あとで読む (b434) ---
     @discord.ui.button(label="あとで読む", style=discord.ButtonStyle.primary, row=0, custom_id="read_later")
     async def read_later(self, interaction: discord.Interaction, button: discord.ui.Button):
         button_name = "blue_read_later"
+
         def filter_func(msg):
             if not user_reacted(msg, READ_LATER_REACTION_ID, interaction.user.id):
                 logging.debug(f"[{button_name}] Excluding msg_id={msg['message_id']}: no b434 from user.")
@@ -347,10 +340,11 @@ class CombinedView(discord.ui.View):
 
         await self.get_and_handle_random_message(interaction, filter_func, button_name=button_name)
 
-    # --- 青ボタン：お気に入り (b435)
+    # --- 青ボタン：お気に入り (b435) ---
     @discord.ui.button(label="お気に入り", style=discord.ButtonStyle.primary, row=0, custom_id="favorite")
     async def favorite(self, interaction: discord.Interaction, button: discord.ui.Button):
         button_name = "blue_favorite"
+
         def filter_func(msg):
             logging.debug(f"DB reactions for msg_id={msg['message_id']}: {msg['reactions']}")
             if not user_reacted(msg, FAVORITE_REACTION_ID, interaction.user.id):
@@ -364,10 +358,11 @@ class CombinedView(discord.ui.View):
 
         await self.get_and_handle_random_message(interaction, filter_func, button_name=button_name)
 
-    # --- 赤ボタン：ランダム (b431) 除外
+    # --- 赤ボタン：ランダム ---
     @discord.ui.button(label="ランダム", style=discord.ButtonStyle.danger, row=1, custom_id="red_random")
     async def red_random(self, interaction: discord.Interaction, button: discord.ui.Button):
         button_name = "red_random"
+
         def filter_func(msg):
             if user_reacted(msg, RANDOM_EXCLUDE_ID, interaction.user.id):
                 logging.debug(f"[{button_name}] Excluding msg_id={msg['message_id']}: user has b431.")
@@ -382,10 +377,11 @@ class CombinedView(discord.ui.View):
 
         await self.get_and_handle_random_message(interaction, filter_func, button_name=button_name)
 
-    # --- 赤ボタン：あとで読む + 除外 (b431)
+    # --- 赤ボタン：あとで読む (b434) + ランダム除外(b431)
     @discord.ui.button(label="あとで読む", style=discord.ButtonStyle.danger, row=1, custom_id="conditional_read_later")
     async def conditional_read_later(self, interaction: discord.Interaction, button: discord.ui.Button):
         button_name = "red_read_later"
+
         def filter_func(msg):
             if not user_reacted(msg, READ_LATER_REACTION_ID, interaction.user.id):
                 logging.debug(f"[{button_name}] Excluding msg_id={msg['message_id']}: no b434 from user.")
@@ -406,8 +402,8 @@ async def send_panel(channel):
     global current_panel_message_id
     if current_panel_message_id:
         try:
-            panel_msg = await channel.fetch_message(current_panel_message_id)
-            await panel_msg.delete()
+            old_panel = await channel.fetch_message(current_panel_message_id)
+            await old_panel.delete()
             logging.info(f"Deleted previous panel message with ID {current_panel_message_id}.")
         except discord.NotFound:
             logging.warning(f"Previous panel message with ID {current_panel_message_id} not found.")
@@ -417,8 +413,8 @@ async def send_panel(channel):
     embed = create_panel_embed()
     view = CombinedView()
     try:
-        sent_message = await channel.send(embed=embed, view=view)
-        current_panel_message_id = sent_message.id
+        sent_msg = await channel.send(embed=embed, view=view)
+        current_panel_message_id = sent_msg.id
         logging.info(f"Sent new panel message with ID {current_panel_message_id}.")
     except discord.HTTPException as e:
         logging.error(f"Error sending panel message: {e}")
@@ -428,11 +424,11 @@ def create_panel_embed():
         title="🎯 エロ漫画ルーレット",
         description=(
             "botがエロ漫画を選んでくれるよ！\n\n"
-            "🔵：自分の<:b431:1289782471197458495>を除外しない\n"
-            "🔴：自分の<:b431:1289782471197458495>を除外する\n\n"
+            "🔵：自分の <:b431:1289782471197458495> を除外しない\n"
+            "🔴：自分の <:b431:1289782471197458495> を除外する\n\n"
             "**ランダム**：全体からランダム\n"
-            "**あとで読む**： <:b434:1304690617405669376> を付けた投稿\n"
-            "**お気に入り**： <:b435:1304690627723657267> を付けた投稿"
+            "**あとで読む**：<:b434:1304690617405669376>を付けた投稿\n"
+            "**お気に入り**：<:b435:1304690627723657267>を付けた投稿"
         ),
         color=0xFF69B4
     )
@@ -441,10 +437,11 @@ def create_panel_embed():
 ########################
 # スラッシュコマンド
 ########################
-@bot.tree.command(name="panel", description="パネルを表示します。")
+@bot.tree.command(name="panel", description="ルーレット用のパネルを表示します。")
 async def panel(interaction: discord.Interaction):
     channel = interaction.channel
     if channel:
+        # 単純な応答だけ
         await interaction.response.send_message("パネルを表示します！", ephemeral=True)
         await send_panel(channel)
     else:
@@ -455,7 +452,7 @@ async def check_reactions(interaction: discord.Interaction, message_id: str):
     try:
         msg_id = int(message_id)
     except ValueError:
-        await interaction.response.send_message("無効なメッセージIDです。数値を指定してください。", ephemeral=True)
+        await interaction.response.send_message("無効なメッセージIDです。", ephemeral=True)
         return
 
     conn = get_db_connection()
@@ -576,13 +573,14 @@ async def on_ready():
 ########################
 # メッセージ履歴同期タスク
 ########################
-@tasks.loop(minutes=60)
+@tasks.loop(minutes=10)  # ← 以前より頻度を高める (10分おき)
 async def save_all_messages_to_db_task():
     await save_all_messages_to_db()
 
 async def save_all_messages_to_db():
     """
-    チャンネルのすべてのメッセージをページングしながら取得し、DBに保存する。
+    チャンネルの全メッセージをページングで取得し、
+    DBに保存。reaction.users() の取得ログを詳細に出す。
     """
     channel = bot.get_channel(THREAD_ID)
     if channel is None:
@@ -591,25 +589,23 @@ async def save_all_messages_to_db():
 
     all_messages = []
     last_msg = None
-    batch_size = 500  # 一度に取得するメッセージ数(大きすぎると時間がかかる)
+    batch_size = 100  # バッチサイズ小さめにして、API制限回避
 
     try:
         while True:
             batch = []
-            # before=last_msg で前回の最古メッセージよりさらに古いものを取得
             async for msg in channel.history(limit=batch_size, before=last_msg):
                 batch.append(msg)
 
             if not batch:
-                break  # これ以上古いメッセージがない
+                break
 
             all_messages.extend(batch)
-            last_msg = batch[-1].id  # 次のループでさらに古いメッセージを取得する
+            last_msg = batch[-1].id
 
         if all_messages:
             await bulk_save_messages_to_db(all_messages)
         logging.info(f"Saved total {len(all_messages)} messages to the database (paging).")
-
     except discord.HTTPException as e:
         logging.error(f"Error fetching message history in paging: {e}")
 
@@ -621,12 +617,16 @@ async def bulk_save_messages_to_db(messages):
         data = []
         for message in messages:
             reactions_dict = {}
+
             for reaction in message.reactions:
                 if reaction.custom_emoji:
                     emoji_id = reaction.emoji.id
                     if emoji_id:
+                        # --- 詳細ログ: reaction.users() の呼び出し結果を確認 ---
+                        logging.debug(f"Fetching users for reaction {emoji_id} in message {message.id} (count={reaction.count})")
                         try:
                             users = [user.id async for user in reaction.users()]
+                            logging.debug(f"Successfully got users={users} for reaction {emoji_id} in message {message.id}")
                         except discord.HTTPException as e:
                             logging.error(f"Error fetching users for reaction {emoji_id} in message {message.id}: {e}")
                             users = []
@@ -644,6 +644,7 @@ async def bulk_save_messages_to_db(messages):
                   reactions = EXCLUDED.reactions
             """, data)
             conn.commit()
+
         logging.info(f"Bulk inserted or updated {len(messages)} messages.")
     except Error as e:
         logging.error(f"Error during bulk insert/update: {e}")
