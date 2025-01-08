@@ -9,7 +9,6 @@ from psycopg2.extras import DictCursor
 from dotenv import load_dotenv
 import os
 import json
-import time
 
 ########################
 # .env 環境変数読み込み
@@ -503,6 +502,46 @@ async def check_reactions(interaction: discord.Interaction, message_id: str):
         await interaction.response.send_message("リアクション取得中にエラーが発生しました。", ephemeral=True)
     finally:
         release_db_connection(conn)
+
+@bot.tree.command(name="migrate_reactions", description="既存のメッセージのリアクションをデータベースに保存します。")
+@discord.app_commands.checks.has_permissions(administrator=True)
+async def migrate_reactions(interaction: discord.Interaction):
+    await interaction.response.send_message("リアクションの移行を開始します。しばらくお待ちください...", ephemeral=True)
+    channel = bot.get_channel(THREAD_ID)
+    if channel is None:
+        await interaction.followup.send("指定したTHREAD_IDのチャンネルが見つかりませんでした。", ephemeral=True)
+        return
+
+    all_messages = []
+    try:
+        async for message in channel.history(limit=None):
+            all_messages.append(message)
+    except discord.HTTPException as e:
+        logging.error(f"Error fetching message history for migration: {e}")
+        await interaction.followup.send("メッセージ履歴の取得中にエラーが発生しました。", ephemeral=True)
+        return
+
+    success_count = 0
+    for message in all_messages:
+        await ensure_message_in_db(message)
+        # Fetch reactions
+        try:
+            message = await channel.fetch_message(message.id)
+            reactions = message.reactions
+            for reaction in reactions:
+                if reaction.emoji.id not in REACTIONS.values():
+                    continue
+                async for user in reaction.users():
+                    if user.id == bot.user.id:
+                        continue
+                    await update_reactions_in_db(message.id, reaction.emoji.id, user.id, add=True)
+            success_count += 1
+            # Optional: Add a short delay to prevent rate limiting
+            await asyncio.sleep(0.1)
+        except discord.HTTPException as e:
+            logging.error(f"Error fetching reactions for message_id={message.id}: {e}")
+
+    await interaction.followup.send(f"リアクションの移行が完了しました。{success_count} 件のメッセージを処理しました。", ephemeral=True)
 
 ########################
 # リアクションイベント
