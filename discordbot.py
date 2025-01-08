@@ -60,7 +60,7 @@ REACTIONS = {
 READ_LATER_REACTION_ID = REACTIONS["b434"]  # あとで読む
 FAVORITE_REACTION_ID   = REACTIONS["b435"]  # お気に入り
 RANDOM_EXCLUDE_ID      = REACTIONS["b431"]  # ランダム除外
-SPECIFIC_EXCLUDE_USER  = 695096014482440244 # 特定投稿者 (例)
+SPECIFIC_EXCLUDE_USER  = 695096014482440244     # 特定投稿者 (例)
 
 ########################
 # DB接続プール
@@ -153,24 +153,14 @@ async def ensure_message_in_db(message):
             if row:
                 return
 
-            # リアクション収集
-            reactions_dict = {}
-            for reaction in message.reactions:
-                if reaction.custom_emoji:
-                    emoji_id = reaction.emoji.id
-                    if emoji_id:
-                        users = [user.id async for user in reaction.users()]
-                        reactions_dict[str(emoji_id)] = users
-            reactions_json = json.dumps(reactions_dict)
-
+            # リアクション収集は同期タスクに任せるため削除
             cur.execute("""
-                INSERT INTO messages (message_id, thread_id, author_id, reactions, content)
-                VALUES (%s, %s, %s, %s, %s)
+                INSERT INTO messages (message_id, thread_id, author_id, content)
+                VALUES (%s, %s, %s, %s)
                 ON CONFLICT DO NOTHING
-            """, (message.id, message.channel.id, message.author.id, reactions_json, message.content))
+            """, (message.id, message.channel.id, message.author.id, message.content))
             conn.commit()
             logging.info(f"Inserted new message into DB (message_id={message.id}).")
-
     except Error as e:
         logging.error(f"Error ensuring message in DB: {e}")
     finally:
@@ -216,6 +206,7 @@ async def update_reactions_in_db(message_id, emoji_id, user_id, add=True):
                 WHERE message_id = %s
             """, (new_json, message_id))
             conn.commit()
+            logging.info(f"Reactions updated for message_id={message_id}. Current reactions: {new_json}")
     except Error as e:
         logging.error(f"Error updating reactions in DB: {e}")
     finally:
@@ -317,6 +308,9 @@ class CombinedView(discord.ui.View):
             if msg['author_id'] == interaction.user.id:
                 logging.debug(f"[{button_name}] Excluding msg_id={msg['message_id']}: same user.")
                 return False
+            if last_chosen_authors.get(interaction.user.id) == msg['author_id']:
+                logging.debug(f"[{button_name}] Excluding msg_id={msg['message_id']}: same author as last selection.")
+                return False
             return True
 
         await self.get_and_handle_random_message(interaction, filter_func, button_name=button_name)
@@ -331,6 +325,9 @@ class CombinedView(discord.ui.View):
                 return False
             if msg['author_id'] == interaction.user.id:
                 logging.debug(f"[{button_name}] Excluding msg_id={msg['message_id']}: same user.")
+                return False
+            if last_chosen_authors.get(interaction.user.id) == msg['author_id']:
+                logging.debug(f"[{button_name}] Excluding msg_id={msg['message_id']}: same author as last selection.")
                 return False
             return True
 
@@ -351,6 +348,9 @@ class CombinedView(discord.ui.View):
             if msg['author_id'] == interaction.user.id:
                 logging.debug(f"[{button_name}] Excluding msg_id={msg['message_id']}: same user.")
                 return False
+            if last_chosen_authors.get(interaction.user.id) == msg['author_id']:
+                logging.debug(f"[{button_name}] Excluding msg_id={msg['message_id']}: same author as last selection.")
+                return False
             return True
 
         await self.get_and_handle_random_message(interaction, filter_func, button_name=button_name)
@@ -369,6 +369,9 @@ class CombinedView(discord.ui.View):
             if msg['author_id'] == SPECIFIC_EXCLUDE_USER:
                 logging.debug(f"[{button_name}] Excluding msg_id={msg['message_id']}: specific exclude author.")
                 return False
+            if last_chosen_authors.get(interaction.user.id) == msg['author_id']:
+                logging.debug(f"[{button_name}] Excluding msg_id={msg['message_id']}: same author as last selection.")
+                return False
             return True
 
         await self.get_and_handle_random_message(interaction, filter_func, button_name=button_name)
@@ -386,6 +389,9 @@ class CombinedView(discord.ui.View):
                 return False
             if msg['author_id'] == interaction.user.id:
                 logging.debug(f"[{button_name}] Excluding msg_id={msg['message_id']}: same user.")
+                return False
+            if last_chosen_authors.get(interaction.user.id) == msg['author_id']:
+                logging.debug(f"[{button_name}] Excluding msg_id={msg['message_id']}: same author as last selection.")
                 return False
             return True
 
@@ -574,7 +580,7 @@ async def save_all_messages_to_db_task():
 async def save_all_messages_to_db():
     """
     メッセージをページングで取得し、DBに保存する。
-    -- 修正箇所: 'before'に message.id ではなく 'Message' オブジェクトを渡す --
+    リアクション情報の保存を除外。
     """
     channel = bot.get_channel(THREAD_ID)
     if channel is None:
@@ -610,42 +616,30 @@ async def save_all_messages_to_db():
         logging.error(f"Error fetching message history in paging: {e}")
 
 async def bulk_save_messages_to_db(messages):
+    """
+    メッセージの基本情報のみをデータベースに保存。
+    リアクション情報の保存は行わない。
+    """
     conn = get_db_connection()
     if not conn or not messages:
         return
     try:
         data = []
         for message in messages:
-            reactions_dict = {}
-            for reaction in message.reactions:
-                if reaction.custom_emoji:
-                    emoji_id = reaction.emoji.id
-                    if emoji_id:
-                        logging.debug(f"Fetching users for reaction {emoji_id} in message {message.id} (count={reaction.count})")
-                        try:
-                            users = [user.id async for user in reaction.users()]
-                            logging.debug(f"Successfully got users={users} for reaction {emoji_id} in message {message.id}")
-                        except discord.HTTPException as e:
-                            logging.error(f"Error fetching users for reaction {emoji_id} in message {message.id}: {e}")
-                            users = []
-                        reactions_dict[str(emoji_id)] = users
-
-            reactions_json = json.dumps(reactions_dict)
-            data.append((message.id, message.channel.id, message.author.id, reactions_json, message.content))
-
+            data.append((message.id, message.channel.id, message.author.id, message.content))
+            logging.debug(f"Bulk saving message_id={message.id} to DB without reactions.")
+        
         with conn.cursor() as cur:
             cur.executemany("""
-                INSERT INTO messages (message_id, thread_id, author_id, reactions, content)
-                VALUES (%s, %s, %s, %s, %s)
-                ON CONFLICT (message_id) DO UPDATE SET
-                  content = EXCLUDED.content,
-                  reactions = EXCLUDED.reactions
+                INSERT INTO messages (message_id, thread_id, author_id, content)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (message_id) DO NOTHING
             """, data)
             conn.commit()
 
-        logging.info(f"Bulk inserted or updated {len(messages)} messages.")
+        logging.info(f"Bulk inserted {len(messages)} messages without reactions.")
     except Error as e:
-        logging.error(f"Error during bulk insert/update: {e}")
+        logging.error(f"Error during bulk insert: {e}")
     finally:
         release_db_connection(conn)
 
