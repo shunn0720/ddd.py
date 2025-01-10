@@ -77,21 +77,22 @@ except Error as e:
     db_pool = None
 
 def get_db_connection():
-    try:
-        if db_pool:
+    if db_pool:
+        try:
             return db_pool.getconn()
-        else:
-            raise Error("Database connection pool is not initialized.")
-    except Error as e:
-        logging.error(f"Error getting database connection: {e}")
+        except Error as e:
+            logging.error(f"Error getting database connection: {e}")
+            return None
+    else:
+        logging.error("Database connection pool is not initialized.")
         return None
 
 def release_db_connection(conn):
-    try:
-        if db_pool and conn:
+    if db_pool and conn:
+        try:
             db_pool.putconn(conn)
-    except Error as e:
-        logging.error(f"Error releasing database connection: {e}")
+        except Error as e:
+            logging.error(f"Error releasing database connection: {e}")
 
 def initialize_db():
     conn = get_db_connection()
@@ -142,6 +143,15 @@ async def safe_fetch_message(channel, message_id):
         return None
 
 async def ensure_message_in_db(message):
+    if not message:
+        return
+    try:
+        # 非同期に実行するために asyncio.to_thread を使用
+        await asyncio.to_thread(_ensure_message_in_db_sync, message)
+    except Exception as e:
+        logging.error(f"Error ensuring message in DB: {e}")
+
+def _ensure_message_in_db_sync(message):
     conn = get_db_connection()
     if not conn:
         return
@@ -166,6 +176,12 @@ async def ensure_message_in_db(message):
         release_db_connection(conn)
 
 async def update_reactions_in_db(message_id, emoji_id, user_id, add=True):
+    try:
+        await asyncio.to_thread(_update_reactions_in_db_sync, message_id, emoji_id, user_id, add)
+    except Exception as e:
+        logging.error(f"Error updating reactions in DB: {e}")
+
+def _update_reactions_in_db_sync(message_id, emoji_id, user_id, add=True):
     conn = get_db_connection()
     if not conn:
         return
@@ -218,11 +234,18 @@ def user_reacted(msg, reaction_id, user_id):
             reaction_data = json.loads(reaction_data)
         except json.JSONDecodeError:
             reaction_data = {}
-    users = reaction_data.get(str(reaction_id), [])
-    logging.debug(f"user_reacted: reaction_id={reaction_id}, user_id={user_id}, users={users}")
-    return (user_id in users)
+    logging.debug(f"user_reacted: reaction_id={reaction_id}, user_id={user_id}, users={reaction_data.get(str(reaction_id), [])}")
+    return (user_id in reaction_data.get(str(reaction_id), []))
 
 async def get_random_message(thread_id, filter_func=None, button_name="N/A"):
+    try:
+        # 非同期に実行するために asyncio.to_thread を使用
+        return await asyncio.to_thread(_get_random_message_sync, thread_id, filter_func, button_name)
+    except Exception as e:
+        logging.error(f"Error getting random message: {e}")
+        return None
+
+def _get_random_message_sync(thread_id, filter_func=None, button_name="N/A"):
     conn = get_db_connection()
     if not conn:
         return None
@@ -284,18 +307,20 @@ class CombinedView(discord.ui.View):
             author_name = await self.get_author_name(random_message['author_id'])
             # 単純メッセージ送信
             await interaction.channel.send(
-                f"{interaction.user.mention} さんには、{author_name} さんの投稿がおすすめです！\n"
+                f"{interaction.user.mention} さんには、{author_name} さんの投稿がおすすめでだよ！\n"
                 f"https://discord.com/channels/{interaction.guild_id}/{THREAD_ID}/{random_message['message_id']}"
             )
         else:
             await interaction.channel.send(
-                f"{interaction.user.mention} さん、該当する投稿なかったからリアクション見直してみて！。"
+                f"{interaction.user.mention} さん、該当する投稿なかった、リアクションを見直してみて！"
             )
 
         # パネルを再送信
         await send_panel(interaction.channel)
 
     async def get_and_handle_random_message(self, interaction, filter_func, button_name="N/A"):
+        # インタラクションへの迅速な応答
+        await interaction.response.defer()  # 応答を延期
         random_msg = await get_random_message(THREAD_ID, filter_func=filter_func, button_name=button_name)
         await self.handle_selection(interaction, random_msg, interaction.user.id)
 
@@ -437,6 +462,17 @@ def create_panel_embed():
 ########################
 # スラッシュコマンド
 ########################
+
+# カスタムチェックの定義
+def is_admin_or_has_role():
+    async def predicate(interaction: discord.Interaction) -> bool:
+        user = interaction.user
+        if isinstance(user, discord.Member):
+            # Administrator権限を持つか、特定のロールを持つかをチェック
+            return user.guild_permissions.administrator or any(role.id == 1283962068197965897 for role in user.roles)
+        return False
+    return discord.app_commands.check(predicate)
+
 @bot.tree.command(name="panel", description="ルーレット用パネルを表示します。")
 async def panel(interaction: discord.Interaction):
     channel = interaction.channel
@@ -454,18 +490,52 @@ async def check_reactions(interaction: discord.Interaction, message_id: str):
         await interaction.response.send_message("無効なメッセージIDです。", ephemeral=True)
         return
 
-    conn = get_db_connection()
-    if not conn:
-        await interaction.response.send_message("DB接続に失敗しました。", ephemeral=True)
+    try:
+        # 非同期に実行するために asyncio.to_thread を使用
+        reactions = await asyncio.to_thread(_fetch_reactions_sync, msg_id)
+    except Exception as e:
+        logging.error(f"Error fetching reactions for message_id={msg_id}: {e}")
+        await interaction.response.send_message("リアクション取得中にエラーが発生しました。", ephemeral=True)
         return
 
+    if reactions is None:
+        await interaction.response.send_message("DBにそのメッセージが存在しません。", ephemeral=True)
+        return
+
+    if not reactions:
+        await interaction.response.send_message("リアクションはありません。", ephemeral=True)
+    else:
+        embed = discord.Embed(
+            title=f"Message ID: {msg_id} のリアクション情報",
+            color=0x00FF00
+        )
+        for emoji_id, user_ids in reactions.items():
+            try:
+                emoji_obj = bot.get_emoji(int(emoji_id))
+                if emoji_obj:
+                    emoji_str = str(emoji_obj)
+                else:
+                    emoji_str = f"UnknownEmoji({emoji_id})"
+            except ValueError:
+                emoji_str = f"InvalidEmojiID({emoji_id})"
+
+            embed.add_field(
+                name=emoji_str,
+                value=f"{len(user_ids)} 人: {user_ids}",
+                inline=False
+            )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+def _fetch_reactions_sync(msg_id):
+    conn = get_db_connection()
+    if not conn:
+        return None
     try:
         with conn.cursor(cursor_factory=DictCursor) as cur:
             cur.execute("SELECT reactions FROM messages WHERE message_id = %s", (msg_id,))
             row = cur.fetchone()
             if not row:
-                await interaction.response.send_message("DBにそのメッセージが存在しません。", ephemeral=True)
-                return
+                return None
 
             r = row['reactions'] or {}
             if isinstance(r, str):
@@ -474,38 +544,17 @@ async def check_reactions(interaction: discord.Interaction, message_id: str):
                 except json.JSONDecodeError:
                     r = {}
 
-            if not r:
-                await interaction.response.send_message("リアクションはありません。", ephemeral=True)
-            else:
-                embed = discord.Embed(
-                    title=f"Message ID: {msg_id} のリアクション情報",
-                    color=0x00FF00
-                )
-                for emoji_id, user_ids in r.items():
-                    try:
-                        emoji_obj = bot.get_emoji(int(emoji_id))
-                        if emoji_obj:
-                            emoji_str = str(emoji_obj)
-                        else:
-                            emoji_str = f"UnknownEmoji({emoji_id})"
-                    except ValueError:
-                        emoji_str = f"InvalidEmojiID({emoji_id})"
-
-                    embed.add_field(
-                        name=emoji_str,
-                        value=f"{len(user_ids)} 人: {user_ids}",
-                        inline=False
-                    )
-                await interaction.response.send_message(embed=embed, ephemeral=True)
+            return r
     except Error as e:
         logging.error(f"Error fetching reactions for message_id={msg_id}: {e}")
-        await interaction.response.send_message("リアクション取得中にエラーが発生しました。", ephemeral=True)
+        return None
     finally:
         release_db_connection(conn)
 
-@bot.tree.command(name="migrate_reactions", description="既存のメッセージのリアクションをデータベースに保存します。")
-@discord.app_commands.checks.has_permissions(administrator=True)
-async def migrate_reactions(interaction: discord.Interaction):
+# --- コマンド名を db_save に変更し、権限を拡張 ---
+@bot.tree.command(name="db_save", description="既存のメッセージのリアクションをデータベースに保存します。")
+@is_admin_or_has_role()  # カスタムチェックを適用
+async def db_save(interaction: discord.Interaction):
     await interaction.response.send_message("リアクションの移行を開始します。しばらくお待ちください...", ephemeral=True)
     channel = bot.get_channel(THREAD_ID)
     if channel is None:
@@ -659,15 +708,24 @@ async def bulk_save_messages_to_db(messages):
     メッセージの基本情報のみをデータベースに保存。
     リアクション情報の保存は行わない。
     """
+    if not messages:
+        return
+    try:
+        # 非同期に実行するために asyncio.to_thread を使用
+        await asyncio.to_thread(_bulk_save_messages_to_db_sync, messages)
+    except Exception as e:
+        logging.error(f"Error during bulk save of messages: {e}")
+
+def _bulk_save_messages_to_db_sync(messages):
     conn = get_db_connection()
-    if not conn or not messages:
+    if not conn:
         return
     try:
         data = []
         for message in messages:
             data.append((message.id, message.channel.id, message.author.id, message.content))
             logging.debug(f"Bulk saving message_id={message.id} to DB without reactions.")
-        
+
         with conn.cursor() as cur:
             cur.executemany("""
                 INSERT INTO messages (message_id, thread_id, author_id, content)
