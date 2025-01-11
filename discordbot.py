@@ -307,7 +307,7 @@ class CombinedView(discord.ui.View):
             author_name = await self.get_author_name(random_message['author_id'])
             # 単純メッセージ送信
             await interaction.channel.send(
-                f"{interaction.user.mention} さんには、{author_name} さんの投稿がおすすめでだよ！\n"
+                f"{interaction.user.mention} さんには、{author_name} さんの投稿がおすすめだよ！\n"
                 f"https://discord.com/channels/{interaction.guild_id}/{THREAD_ID}/{random_message['message_id']}"
             )
         else:
