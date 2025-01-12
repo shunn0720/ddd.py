@@ -469,7 +469,9 @@ def is_admin_or_has_role():
         user = interaction.user
         if isinstance(user, discord.Member):
             # Administrator権限を持つか、特定のロールを持つかをチェック
-            return user.guild_permissions.administrator or any(role.id == 1283962068197965897 for role in user.roles)
+            has_role = any(role.id == 1283962068197965897 for role in user.roles)
+            if user.guild_permissions.administrator or has_role:
+                return True
         return False
     return discord.app_commands.check(predicate)
 
@@ -555,42 +557,68 @@ def _fetch_reactions_sync(msg_id):
 @bot.tree.command(name="db_save", description="既存のメッセージのリアクションをデータベースに保存します。")
 @is_admin_or_has_role()  # カスタムチェックを適用
 async def db_save(interaction: discord.Interaction):
-    await interaction.response.send_message("リアクションの移行を開始します。しばらくお待ちください...", ephemeral=True)
-    channel = bot.get_channel(THREAD_ID)
-    if channel is None:
-        await interaction.followup.send("指定したTHREAD_IDのチャンネルが見つかりませんでした。", ephemeral=True)
-        return
-
-    all_messages = []
     try:
-        async for message in channel.history(limit=None):
-            all_messages.append(message)
-    except discord.HTTPException as e:
-        logging.error(f"Error fetching message history for migration: {e}")
-        await interaction.followup.send("メッセージ履歴の取得中にエラーが発生しました。", ephemeral=True)
-        return
+        logging.info(f"db_save command invoked by user_id={interaction.user.id}")
 
-    success_count = 0
-    for message in all_messages:
-        await ensure_message_in_db(message)
-        # Fetch reactions
+        # インタラクションへの迅速な応答
+        await interaction.response.send_message("リアクションの移行を開始します。しばらくお待ちください...", ephemeral=True)
+        logging.debug("Sent initial response to user.")
+
+        # バックグラウンドタスクとして処理を実行
+        asyncio.create_task(run_db_save(interaction))
+
+    except Exception as e:
+        logging.error(f"Unexpected error in db_save command: {e}", exc_info=True)
+        # Check if the interaction has already been responded to
+        if not interaction.response.is_done():
+            await interaction.response.send_message("リアクションの移行中に予期しないエラーが発生しました。", ephemeral=True)
+        else:
+            await interaction.followup.send("リアクションの移行中に予期しないエラーが発生しました。", ephemeral=True)
+
+async def run_db_save(interaction: discord.Interaction):
+    try:
+        channel = bot.get_channel(THREAD_ID)
+        if channel is None:
+            await interaction.followup.send("指定したTHREAD_IDのチャンネルが見つかりませんでした。", ephemeral=True)
+            logging.error("Specified THREAD_ID channel not found.")
+            return
+
+        all_messages = []
         try:
-            message = await channel.fetch_message(message.id)
-            reactions = message.reactions
-            for reaction in reactions:
-                if reaction.emoji.id not in REACTIONS.values():
-                    continue
-                async for user in reaction.users():
-                    if user.id == bot.user.id:
-                        continue
-                    await update_reactions_in_db(message.id, reaction.emoji.id, user.id, add=True)
-            success_count += 1
-            # Optional: Add a short delay to prevent rate limiting
-            await asyncio.sleep(0.1)
+            async for message in channel.history(limit=None):
+                all_messages.append(message)
+            logging.debug(f"Fetched {len(all_messages)} messages.")
         except discord.HTTPException as e:
-            logging.error(f"Error fetching reactions for message_id={message.id}: {e}")
+            logging.error(f"Error fetching message history for migration: {e}")
+            await interaction.followup.send("メッセージ履歴の取得中にエラーが発生しました。", ephemeral=True)
+            return
 
-    await interaction.followup.send(f"リアクションの移行が完了しました。{success_count} 件のメッセージを処理しました。", ephemeral=True)
+        success_count = 0
+        for message in all_messages:
+            await ensure_message_in_db(message)
+            # Fetch reactions
+            try:
+                message = await channel.fetch_message(message.id)
+                reactions = message.reactions
+                for reaction in reactions:
+                    if reaction.emoji.id not in REACTIONS.values():
+                        continue
+                    async for user in reaction.users():
+                        if user.id == bot.user.id:
+                            continue
+                        await update_reactions_in_db(message.id, reaction.emoji.id, user.id, add=True)
+                success_count += 1
+                # Optional: Add a short delay to prevent rate limiting
+                await asyncio.sleep(0.1)
+            except discord.HTTPException as e:
+                logging.error(f"Error fetching reactions for message_id={message.id}: {e}")
+
+        await interaction.followup.send(f"リアクションの移行が完了しました。{success_count} 件のメッセージを処理しました。", ephemeral=True)
+        logging.info(f"db_save command completed successfully. Processed {success_count} messages.")
+
+    except Exception as e:
+        logging.error(f"Unexpected error in run_db_save task: {e}", exc_info=True)
+        await interaction.followup.send("リアクションの移行中に予期しないエラーが発生しました。", ephemeral=True)
 
 ########################
 # リアクションイベント
