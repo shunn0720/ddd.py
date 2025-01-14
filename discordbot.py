@@ -287,7 +287,7 @@ def _get_random_message_sync(thread_id, filter_func=None, button_name="N/A"):
 ########################
 class CombinedView(discord.ui.View):
     def __init__(self):
-        super().__init__(timeout=None)
+        super().__init__(timeout=None)  # タイムアウトなしに設定
 
     async def get_author_name(self, author_id):
         user = bot.get_user(author_id)
@@ -312,7 +312,7 @@ class CombinedView(discord.ui.View):
             )
         else:
             await interaction.channel.send(
-                f"{interaction.user.mention} さん、該当する投稿なかった、リアクションを見直してみて！"
+                f"{interaction.user.mention} さん、該当する投稿がありませんでした。リアクションを見直してみてください！"
             )
 
         # パネルを再送信
@@ -325,7 +325,7 @@ class CombinedView(discord.ui.View):
         await self.handle_selection(interaction, random_msg, interaction.user.id)
 
     # --- 青ボタン：ランダム ---
-    @discord.ui.button(label="ランダム", style=discord.ButtonStyle.primary, row=0, custom_id="blue_random")
+    @discord.ui.button(label="ランダム", style=discord.ButtonStyle.primary, row=0, custom_id="blue_random_unique_id")
     async def blue_random(self, interaction: discord.Interaction, button: discord.ui.Button):
         button_name = "blue_random"
         def filter_func(msg):
@@ -340,7 +340,7 @@ class CombinedView(discord.ui.View):
         await self.get_and_handle_random_message(interaction, filter_func, button_name=button_name)
 
     # --- 青ボタン：あとで読む (b434) ---
-    @discord.ui.button(label="あとで読む", style=discord.ButtonStyle.primary, row=0, custom_id="read_later")
+    @discord.ui.button(label="あとで読む", style=discord.ButtonStyle.primary, row=0, custom_id="read_later_unique_id")
     async def read_later(self, interaction: discord.Interaction, button: discord.ui.Button):
         button_name = "blue_read_later"
         def filter_func(msg):
@@ -358,7 +358,7 @@ class CombinedView(discord.ui.View):
         await self.get_and_handle_random_message(interaction, filter_func, button_name=button_name)
 
     # --- 青ボタン：お気に入り (b435) ---
-    @discord.ui.button(label="お気に入り", style=discord.ButtonStyle.primary, row=0, custom_id="favorite")
+    @discord.ui.button(label="お気に入り", style=discord.ButtonStyle.primary, row=0, custom_id="favorite_unique_id")
     async def favorite(self, interaction: discord.Interaction, button: discord.ui.Button):
         button_name = "blue_favorite"
         def filter_func(msg):
@@ -380,7 +380,7 @@ class CombinedView(discord.ui.View):
         await self.get_and_handle_random_message(interaction, filter_func, button_name=button_name)
 
     # --- 赤ボタン：ランダム ---
-    @discord.ui.button(label="ランダム", style=discord.ButtonStyle.danger, row=1, custom_id="red_random")
+    @discord.ui.button(label="ランダム", style=discord.ButtonStyle.danger, row=1, custom_id="red_random_unique_id")
     async def red_random(self, interaction: discord.Interaction, button: discord.ui.Button):
         button_name = "red_random"
         def filter_func(msg):
@@ -401,7 +401,7 @@ class CombinedView(discord.ui.View):
         await self.get_and_handle_random_message(interaction, filter_func, button_name=button_name)
 
     # --- 赤ボタン：あとで読む (b434) + b431除外 ---
-    @discord.ui.button(label="あとで読む", style=discord.ButtonStyle.danger, row=1, custom_id="conditional_read_later")
+    @discord.ui.button(label="あとで読む", style=discord.ButtonStyle.danger, row=1, custom_id="conditional_read_later_unique_id")
     async def conditional_read_later(self, interaction: discord.Interaction, button: discord.ui.Button):
         button_name = "red_read_later"
         def filter_func(msg):
@@ -421,6 +421,26 @@ class CombinedView(discord.ui.View):
 
         await self.get_and_handle_random_message(interaction, filter_func, button_name=button_name)
 
+########################
+# 永続的なビューの登録
+########################
+@bot.event
+async def on_ready():
+    logging.info(f"Bot is online! {bot.user}")
+    save_all_messages_to_db_task.start()
+    try:
+        synced = await bot.tree.sync()
+        logging.info(f"Synced {len(synced)} slash commands.")
+    except Exception as e:
+        logging.error(f"Error syncing slash commands: {e}")
+
+    # 永続的なビューを登録
+    bot.add_view(CombinedView())
+    logging.info("Registered CombinedView as a persistent view.")
+
+########################
+# パネルの送信
+########################
 current_panel_message_id = None
 
 async def send_panel(channel):
@@ -448,7 +468,7 @@ def create_panel_embed():
     embed = discord.Embed(
         title="🎯 エロ漫画ルーレット",
         description=(
-            "botがエロ漫画を選んでくれるよ！<a:c296:1288305823323263029>\n\n"
+            "ボタンを押してエロ漫画を選んでください！<a:c296:1288305823323263029>\n\n"
             "🔵：自分の <:b431:1289782471197458495> を除外しない\n"
             "🔴：自分の <:b431:1289782471197458495> を除外する\n\n"
             "**ランダム**：全体から選ぶ\n"
@@ -566,10 +586,11 @@ async def db_save(interaction: discord.Interaction):
 
         # バックグラウンドタスクとして処理を実行
         asyncio.create_task(run_db_save(interaction))
+        logging.debug("Started run_db_save task.")
 
     except Exception as e:
         logging.error(f"Unexpected error in db_save command: {e}", exc_info=True)
-        # Check if the interaction has already been responded to
+        # インタラクションにまだ応答していない場合
         if not interaction.response.is_done():
             await interaction.response.send_message("リアクションの移行中に予期しないエラーが発生しました。", ephemeral=True)
         else:
@@ -577,6 +598,7 @@ async def db_save(interaction: discord.Interaction):
 
 async def run_db_save(interaction: discord.Interaction):
     try:
+        logging.info("run_db_save task started.")
         channel = bot.get_channel(THREAD_ID)
         if channel is None:
             await interaction.followup.send("指定したTHREAD_IDのチャンネルが見つかりませんでした。", ephemeral=True)
@@ -674,19 +696,6 @@ async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
     await update_reactions_in_db(payload.message_id, payload.emoji.id, payload.user_id, add=False)
 
 ########################
-# 起動時の処理
-########################
-@bot.event
-async def on_ready():
-    logging.info(f"Bot is online! {bot.user}")
-    save_all_messages_to_db_task.start()
-    try:
-        synced = await bot.tree.sync()
-        logging.info(f"Synced {len(synced)} slash commands.")
-    except Exception as e:
-        logging.error(f"Error syncing slash commands: {e}")
-
-########################
 # メッセージ履歴同期タスク
 ########################
 @tasks.loop(minutes=5)
@@ -767,6 +776,17 @@ def _bulk_save_messages_to_db_sync(messages):
         logging.error(f"Error during bulk insert: {e}")
     finally:
         release_db_connection(conn)
+
+########################
+# テスト用スラッシュコマンド
+########################
+@bot.tree.command(name="ping", description="Pong!")
+async def ping(interaction: discord.Interaction):
+    try:
+        await interaction.response.send_message("Pong!", ephemeral=True)
+        logging.info(f"Ping command invoked by user_id={interaction.user.id}")
+    except Exception as e:
+        logging.error(f"Error in ping command: {e}", exc_info=True)
 
 ########################
 # Bot起動
