@@ -335,6 +335,9 @@ class CombinedView(discord.ui.View):
             if last_chosen_authors.get(interaction.user.id) == msg['author_id']:
                 logging.debug(f"[{button_name}] Excluding msg_id={msg['message_id']}: same author as last selection.")
                 return False
+            if msg['author_id'] == SPECIFIC_EXCLUDE_USER:
+                logging.debug(f"[{button_name}] Excluding msg_id={msg['message_id']}: specific exclude author.")
+                return False
             return True
 
         await self.get_and_handle_random_message(interaction, filter_func, button_name=button_name)
@@ -352,6 +355,9 @@ class CombinedView(discord.ui.View):
                 return False
             if last_chosen_authors.get(interaction.user.id) == msg['author_id']:
                 logging.debug(f"[{button_name}] Excluding msg_id={msg['message_id']}: same author as last selection.")
+                return False
+            if msg['author_id'] == SPECIFIC_EXCLUDE_USER:
+                logging.debug(f"[{button_name}] Excluding msg_id={msg['message_id']}: specific exclude author.")
                 return False
             return True
 
@@ -374,6 +380,9 @@ class CombinedView(discord.ui.View):
                 return False
             if last_chosen_authors.get(interaction.user.id) == msg['author_id']:
                 logging.debug(f"[{button_name}] Excluding msg_id={msg['message_id']}: same author as last selection.")
+                return False
+            if msg['author_id'] == SPECIFIC_EXCLUDE_USER:
+                logging.debug(f"[{button_name}] Excluding msg_id={msg['message_id']}: specific exclude author.")
                 return False
             return True
 
@@ -416,6 +425,9 @@ class CombinedView(discord.ui.View):
                 return False
             if last_chosen_authors.get(interaction.user.id) == msg['author_id']:
                 logging.debug(f"[{button_name}] Excluding msg_id={msg['message_id']}: same author as last selection.")
+                return False
+            if msg['author_id'] == SPECIFIC_EXCLUDE_USER:
+                logging.debug(f"[{button_name}] Excluding msg_id={msg['message_id']}: specific exclude author.")
                 return False
             return True
 
@@ -483,19 +495,17 @@ def create_panel_embed():
 # スラッシュコマンド
 ########################
 
+# 使用を許可するユーザーIDのセット
+ALLOWED_USERS = {302778094320615425, 822460191118721034}
+
 # カスタムチェックの定義
-def is_admin_or_has_role():
+def is_allowed_user():
     async def predicate(interaction: discord.Interaction) -> bool:
-        user = interaction.user
-        if isinstance(user, discord.Member):
-            # Administrator権限を持つか、特定のロールを持つかをチェック
-            has_role = any(role.id == 1283962068197965897 for role in user.roles)
-            if user.guild_permissions.administrator or has_role:
-                return True
-        return False
+        return interaction.user.id in ALLOWED_USERS
     return discord.app_commands.check(predicate)
 
 @bot.tree.command(name="panel", description="ルーレット用パネルを表示します。")
+@is_allowed_user()  # 使用を許可されたユーザーのみに制限
 async def panel(interaction: discord.Interaction):
     channel = interaction.channel
     if channel:
@@ -505,6 +515,7 @@ async def panel(interaction: discord.Interaction):
         await interaction.response.send_message("エラー: チャンネルが取得できませんでした。", ephemeral=True)
 
 @bot.tree.command(name="check_reactions", description="特定のメッセージのリアクションを表示します。")
+@is_allowed_user()  # 使用を許可されたユーザーのみに制限
 async def check_reactions(interaction: discord.Interaction, message_id: str):
     try:
         msg_id = int(message_id)
@@ -575,7 +586,7 @@ def _fetch_reactions_sync(msg_id):
 
 # --- コマンド名を db_save に変更し、権限を拡張 ---
 @bot.tree.command(name="db_save", description="既存のメッセージのリアクションをデータベースに保存します。")
-@is_admin_or_has_role()  # カスタムチェックを適用
+@is_allowed_user()  # 使用を許可されたユーザーのみに制限
 async def db_save(interaction: discord.Interaction):
     try:
         logging.info(f"db_save command invoked by user_id={interaction.user.id}")
@@ -776,17 +787,6 @@ def _bulk_save_messages_to_db_sync(messages):
         logging.error(f"Error during bulk insert: {e}")
     finally:
         release_db_connection(conn)
-
-########################
-# テスト用スラッシュコマンド
-########################
-@bot.tree.command(name="ping", description="Pong!")
-async def ping(interaction: discord.Interaction):
-    try:
-        await interaction.response.send_message("Pong!", ephemeral=True)
-        logging.info(f"Ping command invoked by user_id={interaction.user.id}")
-    except Exception as e:
-        logging.error(f"Error in ping command: {e}", exc_info=True)
 
 ########################
 # Bot起動
