@@ -457,16 +457,18 @@ current_panel_message_id = None
 
 async def send_panel(channel):
     global current_panel_message_id
-    if current_panel_message_id:
-        try:
-            old_msg = await channel.fetch_message(current_panel_message_id)
-            await old_msg.delete()
-            logging.info(f"Deleted previous panel message with ID {current_panel_message_id}.")
-        except discord.NotFound:
-            logging.warning(f"Previous panel message with ID {current_panel_message_id} not found.")
-        except discord.HTTPException as e:
-            logging.error(f"Error deleting panel message: {e}")
+    try:
+        # 既存のパネルメッセージを検索して削除
+        async for msg in channel.history(limit=100):
+            if msg.author == bot.user and msg.embeds:
+                embed = msg.embeds[0]
+                if embed.title == "🎯 エロ漫画ルーレット":
+                    await msg.delete()
+                    logging.info(f"Deleted old panel message with ID {msg.id}.")
+    except Exception as e:
+        logging.error(f"Error deleting old panel messages: {e}")
 
+    # 新しいパネルを送信
     embed = create_panel_embed()
     view = CombinedView()
     try:
@@ -584,7 +586,6 @@ def _fetch_reactions_sync(msg_id):
     finally:
         release_db_connection(conn)
 
-# --- コマンド名を db_save に変更し、権限を拡張 ---
 @bot.tree.command(name="db_save", description="既存のメッセージのリアクションをデータベースに保存します。")
 @is_allowed_user()  # 使用を許可されたユーザーのみに制限
 async def db_save(interaction: discord.Interaction):
